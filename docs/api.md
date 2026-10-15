@@ -42,4 +42,3 @@ Use invented accounts and a local deployment. Keep browser developer tools open 
 10. When configured, complete the [real Google flow](google-oauth.md) with an authorized test account. Mocked provider tests and callback-rejection checks do not replace this step.
 
 Run rate-limit checks only against your own isolated copy, with bounded request counts and a recovery path. The native `429` response is application enforcement, not evidence that a SecureNow detector or remediation rule is active.
-

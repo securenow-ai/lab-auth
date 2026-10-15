@@ -15,8 +15,19 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS sessions (
   sid varchar NOT NULL PRIMARY KEY,
   sess json NOT NULL,
-  expire timestamp(6) NOT NULL
+  expire timestamptz NOT NULL
 );
+-- Store instants with their timezone so Node hosts outside UTC display the same expiry.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema=current_schema() AND table_name='sessions'
+      AND column_name='expire' AND data_type='timestamp without time zone'
+  ) THEN
+    ALTER TABLE sessions ALTER COLUMN expire TYPE timestamptz USING expire AT TIME ZONE 'UTC';
+  END IF;
+END $$;
 CREATE INDEX IF NOT EXISTS sessions_expire_idx ON sessions (expire);
 
 CREATE TABLE IF NOT EXISTS security_events (

@@ -57,4 +57,3 @@ Record date, revision, environment, test-account identifier, and pass/fail resul
 | Existing email account cannot sign in through Google | Identity linking requires a separate deliberate workflow; use its original sign-in method |
 
 Remove test users and delete or rotate unused OAuth clients when retiring a deployment. Publishing an OAuth app is a separate Google configuration and review decision; deploying this repository does not publish the consent screen.
-

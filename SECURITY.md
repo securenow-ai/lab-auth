@@ -19,4 +19,3 @@ Include the affected revision, a minimal reproduction against your own local dep
 ## Teaching exercises
 
 The checked-in baseline uses normal authentication protections. There is no public switch that intentionally disables them. Run destructive or higher-volume experiments only on an isolated deployment that you control. Detection and firewall controls add visibility and response; they do not repair vulnerable password handling, authorization, or OAuth validation.
-

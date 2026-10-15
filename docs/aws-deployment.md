@@ -102,4 +102,3 @@ Monitor host disk space, container health, readiness, backup results, certificat
 Rotate session, audit-HMAC, database, Google, and runtime SDK credentials as separate changes with tests. Changing the session secret invalidates cookies; changing the audit-HMAC secret changes future IP correlation; changing a PostgreSQL password also requires changing the database role's actual password before updating the application connection string. Updating `POSTGRES_PASSWORD` on an initialized Docker volume alone does not change that database role.
 
 When retiring a copy, first decide whether any backup or evidence needs private retention. Delete the dedicated stack, remove its DNS records if retained, remove the lab's runtime secret and unused Google client, and remove retained S3 objects/buckets according to your retention decision. Confirm these targets belong to this deployment before deleting them. Do not delete a shared hosted zone or a shared Google project.
-

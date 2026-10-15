@@ -149,4 +149,3 @@ CAPTCHA is a future code integration in this baseline. A proper exercise needs a
 ## Evidence checklist for the later episode
 
 For each finding, publish a sanitized record containing: threat, affected code/commit, baseline behavior, code fix, test result, observed telemetry fields, validated rule, real alert, real delivery, enforced response, legitimate-user check, and rollback result. Mark unavailable steps explicitly as pending. Keep private credentials, real identities, IP addresses, and account configuration out of the public teaching artifacts.
-

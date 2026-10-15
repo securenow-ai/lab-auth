@@ -131,4 +131,3 @@ The AWS lab uses a dedicated EC2 host, a private container network for PostgreSQ
 The SecureNow runbook separates a detected event, a delivered alert, and an enforced mitigation. Record evidence for each when you perform the later tutorial; enabling the SDK alone does not prove any of them.
 
 MIT licensed. Northstar Workspace is fictional and is not affiliated with Google.
-

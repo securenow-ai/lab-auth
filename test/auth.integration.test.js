@@ -157,6 +157,7 @@ test('real PostgreSQL: role gates hold server-side and role changes revoke sessi
   assert.equal(security.status, 200);
   assert.ok(security.data.events.some((event) => event.type === 'admin.role_changed'));
   assert.ok(security.data.sessions.every((item) => item.id.length === 16));
+  assert.ok(security.data.sessions.every((item) => new Date(item.expiresAt) > new Date(item.createdAt)));
   assert.equal((await c.request('/api/admin/users')).status, 403);
 });
 

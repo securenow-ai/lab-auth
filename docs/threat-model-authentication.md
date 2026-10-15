@@ -82,4 +82,3 @@ Audit logging can fail when the database is unavailable. Monitor database health
 For the later report, maintain a row per finding with: identifier, affected commit/code, assumptions, severity rationale, code change, regression check, detection status, mitigation status, evidence reference, and residual risk. Use statuses such as `CONFIRMED`, `NEEDS_INSTRUMENTATION`, `NEEDS_BASELINE`, `NEEDS_CUSTOMER_DECISION`, and `FIXED_AND_TESTED` only when the associated evidence exists.
 
 The [SecureNow runbook](securenow-integration.md) describes a controlled sequence from model to instrumentation, validated rule, delivered alert, enforced mitigation, legitimate-user check, and rollback. The later video should show those observed results and explain the code fixes independently.
-

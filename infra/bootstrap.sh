@@ -2,7 +2,7 @@
 set -euo pipefail
 umask 077
 # REGION, ARTIFACT_BUCKET and APP_DOMAIN are supplied by CloudFormation.
-dnf install -y docker awscli2 python3
+dnf install -y docker awscli-2 python3
 systemctl enable --now docker
 install -d -m 755 /usr/local/lib/docker/cli-plugins
 curl --fail --silent --show-error --location https://github.com/docker/compose/releases/download/v2.39.4/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose

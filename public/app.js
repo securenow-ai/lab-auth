@@ -310,6 +310,12 @@ document.addEventListener('submit', async event => {
       const session = await api('/api/me');
       state.user = session.user;
       state.dashboard = null;
+      if (!state.user) {
+        state.renderId++;
+        history.replaceState(null, '', '/');
+        renderAuth('login', 'Your permissions have changed. Sign in again to continue.');
+        return;
+      }
       const page = isAdmin() ? 'admin' : 'overview';
       history.replaceState(null, '', `/#${page}`);
       state.page = page;
