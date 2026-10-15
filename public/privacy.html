@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="How the SecureNow Auth Lab handles account and authentication data." />
+  <title>Privacy · SecureNow Auth Lab</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/legal.css" />
+</head>
+<body>
+  <header><div class="legal-wrap"><a class="brand" href="/">northstar <span>SecureNow Auth Lab</span></a></div></header>
+  <main class="legal-wrap">
+    <h1>Privacy notice</h1>
+    <p class="updated">Updated 15 October 2026</p>
+    <p class="notice">Northstar is a fictional workspace in the public SecureNow authentication learning lab. Authentication uses real accounts. Use a test email and a unique password, and keep personal or confidential information out of this demonstration.</p>
+
+    <h2>Information this lab handles</h2>
+    <ul>
+      <li><strong>Account records:</strong> the name and email you provide, your role, account timestamps, and whether your email was verified by Google.</li>
+      <li><strong>Password sign-in:</strong> a salted scrypt password hash. The application does not store the password itself.</li>
+      <li><strong>Google sign-in:</strong> your profile name, email address, email verification status, and Google account identifier. Google returns identity information so the application can create or recognize your account. The lab stores your name, email, and identifier; it does not persist Google's access or ID tokens.</li>
+      <li><strong>Sessions:</strong> an essential browser session cookie and server-side session records, including account references and sign-in, activity, and expiration times.</li>
+      <li><strong>Security events:</strong> event type, result, timestamps, account references when relevant, request identifiers, and a keyed hash of the connection's IP address. These records exclude passwords and Google tokens. Network infrastructure necessarily processes your IP address to serve requests.</li>
+    </ul>
+    <p>The application requests identity-only Google scopes. It does not access Gmail, messages, contacts, calendar, or Google Drive. Optional Google sign-in is handled by Google under <a href="https://policies.google.com/privacy" rel="noopener noreferrer">Google's privacy policy</a>.</p>
+
+    <h2>Why information is used and who can see it</h2>
+    <p>Information supports sign-in, account permissions, session management, abuse prevention, and the lab's authentication audit trail. Authorized lab administrators can see account details; analysts and administrators can see security events. The hosted deployment uses AWS for hosting, storage, and private database backups.</p>
+    <p>Account information is not used for marketing or advertising, and is not sold. The initial baseline is disconnected from the SecureNow SDK: its application audit trail stays in the lab database. Future changes to data processing will be reflected in this notice.</p>
+
+    <h2>Retention and account deletion</h2>
+    <p>Account records remain until the operator deletes them or resets the lab. Security events are scheduled for deletion after 14 days by an hourly cleanup. Sessions expire after 30 minutes of inactivity or eight hours from sign-in. Private backups are scheduled to expire after seven days; removed information may remain in an existing backup until that backup expires.</p>
+    <p>The lab has no self-service account deletion screen. To ask about your information or request account deletion, use the user support contact displayed on this application's Google sign-in consent screen. Do not publish account details, credentials, or personal information in public GitHub issues.</p>
+
+    <h2>Copies of this open-source lab</h2>
+    <p>This notice describes the deployment at lab-auth.labs.securenow.ai. If someone operates another copy, contact that deployment's operator about its configuration and data handling.</p>
+  </main>
+  <footer><nav class="legal-wrap" aria-label="Footer"><a href="/">Back to the lab</a><a href="/privacy.html" aria-current="page">Privacy</a><a href="/terms.html">Terms</a><a href="https://github.com/securenow-ai/lab-auth" rel="noopener noreferrer">Source code</a></nav></footer>
+</body>
+</html>
