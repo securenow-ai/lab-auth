@@ -73,7 +73,7 @@ The update script reads the secret, builds the app, runs migrations/bootstrap, a
 
 ## Backup and restore exercises
 
-The bootstrap installs `lab-auth-backup.timer`. It schedules an encrypted database dump to the private bucket daily at approximately **03:10 UTC**, with up to ten minutes of randomized delay. This is separate from app telemetry. Review backup success and perform a restore drill before relying on it.
+The bootstrap installs `lab-auth-backup.timer`. It schedules an encrypted database dump to the private bucket daily at approximately **03:10 UTC**, with up to ten minutes of randomized delay. The versioned S3 bucket expires current backups after seven days and schedules noncurrent copies for deletion seven days after they become noncurrent. A backup can therefore persist for roughly fourteen days plus lifecycle processing time. See [AWS lifecycle behavior](https://docs.aws.amazon.com/AmazonS3/latest/userguide/intro-lifecycle-rules.html). This is separate from app telemetry. Review backup success and perform a restore drill before relying on it.
 
 To trigger a backup immediately:
 

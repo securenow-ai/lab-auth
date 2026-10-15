@@ -2,7 +2,7 @@
 
 This is the runbook for the next tutorial phase. The checked-in baseline does not load the SecureNow SDK. A completed app smoke test does not establish that SecureNow threat modeling, telemetry, alerts, notification delivery, or mitigations have been verified.
 
-Use a separate SecureNow application/environment for your copy of the lab. Run every exercise against a deployment and test accounts you control. Prefer an isolated copy for mitigation testing so a test block cannot affect other viewers.
+Use a separate SecureNow application for your copy of the lab and the supported telemetry environment `test`. The Node application still runs in production mode for secure cookies and HTTPS. Run every exercise against a deployment and test accounts you control. Prefer an isolated copy for mitigation testing so a test block cannot affect other viewers.
 
 ## 1. Capture the baseline and model authentication
 
@@ -42,7 +42,7 @@ The connection flow enables telemetry and the application firewall by default. C
       ]
     },
     "runtime": {
-      "deploymentEnvironment": "lab"
+      "deploymentEnvironment": "test"
     }
   }
 }
@@ -62,10 +62,10 @@ The equivalent launch is `npx securenow run src/server.js`. Keep the package ver
 For a deployed copy, generate a runtime-only credential file using:
 
 ```sh
-npx securenow credentials runtime --env production
+npx securenow credentials runtime --env test
 ```
 
-Store and mount the generated file privately at the project runtime path supported by the SDK, such as `/app/.securenow/credentials.production.json`, readable only by the runtime user. Do not bake it into an image or copy admin authentication into the container. The repository ignores credential filenames and excludes `.securenow` from the build context. Add the SDK to the production build and change the app command to `node -r securenow/register src/server.js` only when ready for the instrumentation exercise.
+Store and mount the generated file privately at the project runtime path supported by the SDK, such as `/app/.securenow/credentials.json`, readable only by the runtime user. Do not bake it into an image or copy admin authentication into the container. The repository ignores credential filenames and excludes `.securenow` from the build context. Add the SDK to the production build and change the app command to `node -r securenow/register src/server.js` only when ready for the instrumentation exercise.
 
 Confirm the observed client IP is the real test client. Caddy overwrites `X-Forwarded-For`, the app trusts a single proxy hop, and app/database ports stay private. The SDK has its own IP-resolution configuration; verify it at the SDK layer too. Never fix incorrect IP attribution by trusting forwarded headers from every public client.
 
@@ -96,7 +96,7 @@ npx securenow alerts channels
 npx securenow alerts history --limit 10
 ```
 
-Choose explicit thresholds using a small baseline and the app's existing limits. Scope every candidate to the lab application/environment. SQL must use observed fields and the `__USER_APP_KEYS__` placeholder for tenant scope, and select `ip` when per-IP remediation is intended. Validate a real candidate before creating it:
+Choose explicit thresholds using a small baseline and the app's existing limits. Scope every candidate to the lab application/environment. SQL must use observed fields, explicitly filter the observed deployment-environment field to `test`, use the `__USER_APP_KEYS__` placeholder for tenant scope, and select `ip` when per-IP remediation is intended. The rule-creation command does not replace the SQL environment filter. Validate a real candidate before creating it:
 
 ```sh
 npx securenow alerts rules validate --sql @auth-rule.sql --app YOUR_LAB_APP_KEY
@@ -123,9 +123,9 @@ Use a disposable test source and retain a separate operator session. Never choos
 For a reviewed test IP, current CLI examples are:
 
 ```sh
-npx securenow firewall status --app YOUR_LAB_APP_KEY --env lab
-npx securenow blocklist add YOUR_TEST_PUBLIC_IP --app YOUR_LAB_APP_KEY --env lab --reason "Controlled authentication lab exercise"
-npx securenow firewall test-ip YOUR_TEST_PUBLIC_IP --app YOUR_LAB_APP_KEY --env lab
+npx securenow firewall status --app YOUR_LAB_APP_KEY --env test
+npx securenow blocklist add YOUR_TEST_PUBLIC_IP --app YOUR_LAB_APP_KEY --env test --reason "Controlled authentication lab exercise"
+npx securenow firewall test-ip YOUR_TEST_PUBLIC_IP --app YOUR_LAB_APP_KEY --env test
 ```
 
 After synchronization, repeat a request from that source. Confirm the actual response is denied and a different legitimate client still works. Record the block ID and remove the exercise block afterward:

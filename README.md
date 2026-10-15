@@ -4,6 +4,8 @@ A small, fictional workspace application for learning authentication threat mode
 
 **Demo:** [lab-auth.labs.securenow.ai](https://lab-auth.labs.securenow.ai) · **Source:** [securenow-ai/lab-auth](https://github.com/securenow-ai/lab-auth)
 
+![Northstar Workspace dashboard](docs/assets/dashboard.png)
+
 This repository is the application and deployment foundation for the tutorial. The recorded tutorial, a SecureNow threat-model report, custom detection rules, and alert-delivery evidence belong to the next phase. The baseline starts without the SecureNow SDK, so the later instrumentation step is visible and reproducible. Use fictional data in the public demo.
 
 ## What is included
@@ -126,6 +128,7 @@ The AWS lab uses a dedicated EC2 host, a private container network for PostgreSQ
 | [API and smoke tests](docs/api.md) | Routes, CSRF/session contract, and manual verification sequence |
 | [SecureNow integration](docs/securenow-integration.md) | Instrumentation, data handling, detections, and controlled mitigation checks |
 | [AWS operations](docs/aws-deployment.md) | Provisioning, secrets, HTTPS, smoke tests, backup, and teardown |
+| [Deployment verification](docs/verification.md) | Dated live authentication, Google, persistence, and recovery checks |
 | [Security policy](SECURITY.md) | Private reporting and deployment responsibilities |
 
 The SecureNow runbook separates a detected event, a delivered alert, and an enforced mitigation. Record evidence for each when you perform the later tutorial; enabling the SDK alone does not prove any of them.

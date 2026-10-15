@@ -2,6 +2,8 @@
 
 Google sign-in is optional. With both Google environment values blank, email/password authentication remains available. The application is a confidential server-side web client: keep the client secret on the server.
 
+The hosted lab's identity-only client was published to a production audience, and real registration and returning sign-in passed on 15 October 2026. See the [dated verification record](verification.md). A fork must configure its own Google client and credentials.
+
 ## Create or select the project
 
 1. Open [Google Cloud Console](https://console.cloud.google.com/welcome) using an account permitted to manage the intended project.
