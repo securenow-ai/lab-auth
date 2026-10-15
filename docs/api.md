@@ -42,3 +42,13 @@ Use invented accounts and a local deployment. Keep browser developer tools open 
 10. When configured, complete the [real Google flow](google-oauth.md) with an authorized test account. Mocked provider tests and callback-rejection checks do not replace this step.
 
 Run rate-limit checks only against your own isolated copy, with bounded request counts and a recovery path. The native `429` response is application enforcement, not evidence that a SecureNow detector or remediation rule is active.
+
+## Automated smoke checks
+
+Run `node scripts/smoke.mjs` against localhost, or explicitly name a remote deployment you own:
+
+```sh
+node scripts/smoke.mjs https://YOUR_LAB_HOST --allow-remote
+```
+
+The script creates a fictional member with a random password, checks registration, sessions, cookie flags, CSRF, member permissions, password changes, and logout. It leaves that fictional account behind and never prints or saves its password. Optional private environment variables `SMOKE_ADMIN_EMAIL` and `SMOKE_ADMIN_PASSWORD` also exercise administrator and analyst permissions and role-change session invalidation. Supply them only from your private secret store or terminal environment, never a shared command, CI log, or recording. Run sparingly: login checks consume the native rate-limit allowance.

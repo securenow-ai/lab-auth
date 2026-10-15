@@ -16,14 +16,14 @@ for attempt in $(seq 1 180); do
 done
 tar xzf /opt/lab-auth/source.tar.gz -C /opt/lab-auth
 chmod 700 /opt/lab-auth/infra/update.sh /opt/lab-auth/infra/backup.sh
-/opt/lab-auth/infra/update.sh
+/usr/bin/bash /opt/lab-auth/infra/update.sh
 cat > /etc/systemd/system/lab-auth-backup.service <<'UNIT'
 [Unit]
 Description=Back up Auth Lab PostgreSQL to private encrypted S3
 After=docker.service
 [Service]
 Type=oneshot
-ExecStart=/opt/lab-auth/infra/backup.sh
+ExecStart=/usr/bin/bash /opt/lab-auth/infra/backup.sh
 UNIT
 cat > /etc/systemd/system/lab-auth-backup.timer <<'UNIT'
 [Unit]

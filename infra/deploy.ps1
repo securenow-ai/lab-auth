@@ -36,7 +36,7 @@ for ($attempt = 0; $attempt -lt 60; $attempt++) {
   Start-Sleep -Seconds 5
 }
 if ($online -ne 'Online') { throw 'Instance has not joined Systems Manager. The first release remains uploaded; inspect EC2 boot logs.' }
-$parameters = @{commands=@('if test -f /etc/lab-auth/bootstrap-complete; then /opt/lab-auth/infra/update.sh; else echo First-release-bootstrap-is-in-progress-check-cloud-init-output; fi')} | ConvertTo-Json
+$parameters = @{commands=@('if test -f /etc/lab-auth/bootstrap-complete; then /usr/bin/bash /opt/lab-auth/infra/update.sh; else echo First-release-bootstrap-is-in-progress-check-cloud-init-output; fi')} | ConvertTo-Json
 [System.IO.File]::WriteAllText((Join-Path (Get-Location) '.deployment/ssm-parameters.json'),$parameters)
 $commandId = Invoke-Aws -Arguments @('ssm','send-command','--instance-ids',$instance,'--document-name','AWS-RunShellScript','--parameters','file://.deployment/ssm-parameters.json','--region',$Region,'--query','Command.CommandId','--output','text')
 Write-Output "Release uploaded. Instance: $instance. SSM command: $commandId. App: https://$Domain"

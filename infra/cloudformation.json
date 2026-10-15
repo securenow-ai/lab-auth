@@ -175,9 +175,14 @@
                   "Action": [
                     "s3:GetObject"
                   ],
-                  "Resource": {
-                    "Fn::Sub": "${Artifacts.Arn}/releases/*"
-                  }
+                  "Resource": [
+                    {
+                      "Fn::Sub": "${Artifacts.Arn}/releases/*"
+                    },
+                    {
+                      "Fn::Sub": "${Artifacts.Arn}/backups/*"
+                    }
+                  ]
                 },
                 {
                   "Effect": "Allow",
@@ -261,7 +266,7 @@
         ],
         "UserData": {
           "Fn::Base64": {
-            "Fn::Sub": "#!/bin/bash\nexport REGION=\"${AWS::Region}\"\nexport ARTIFACT_BUCKET=\"${Artifacts}\"\nexport APP_DOMAIN=\"${Domain}\"\nset -euo pipefail\numask 077\n# REGION, ARTIFACT_BUCKET and APP_DOMAIN are supplied by CloudFormation.\ndnf install -y docker awscli-2 python3\nsystemctl enable --now docker\ninstall -d -m 755 /usr/local/lib/docker/cli-plugins\ncurl --fail --silent --show-error --location https://github.com/docker/compose/releases/download/v2.39.4/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose\nchmod 755 /usr/local/lib/docker/cli-plugins/docker-compose\ninstall -d -m 700 /etc/lab-auth\ninstall -d -m 755 /opt/lab-auth\nprintf 'REGION=%s\\nARTIFACT_BUCKET=%s\\nAPP_DOMAIN=%s\\n' \"$REGION\" \"$ARTIFACT_BUCKET\" \"$APP_DOMAIN\" > /etc/lab-auth/deployment.env\nfor attempt in $(seq 1 180); do\n  if aws s3 cp \"s3://$ARTIFACT_BUCKET/releases/source.tar.gz\" /opt/lab-auth/source.tar.gz --region \"$REGION\" --only-show-errors; then break; fi\n  sleep 5\ndone\ntar xzf /opt/lab-auth/source.tar.gz -C /opt/lab-auth\nchmod 700 /opt/lab-auth/infra/update.sh /opt/lab-auth/infra/backup.sh\n/opt/lab-auth/infra/update.sh\ncat > /etc/systemd/system/lab-auth-backup.service <<'UNIT'\n[Unit]\nDescription=Back up Auth Lab PostgreSQL to private encrypted S3\nAfter=docker.service\n[Service]\nType=oneshot\nExecStart=/opt/lab-auth/infra/backup.sh\nUNIT\ncat > /etc/systemd/system/lab-auth-backup.timer <<'UNIT'\n[Unit]\nDescription=Daily Auth Lab database backup\n[Timer]\nOnCalendar=*-*-* 03:10:00 UTC\nRandomizedDelaySec=600\nPersistent=true\n[Install]\nWantedBy=timers.target\nUNIT\nsystemctl daemon-reload\nsystemctl enable --now lab-auth-backup.timer\ntouch /etc/lab-auth/bootstrap-complete\necho 'AUTH_LAB_BOOTSTRAP_COMPLETE'\n"
+            "Fn::Sub": "#!/bin/bash\nexport REGION=\"${AWS::Region}\"\nexport ARTIFACT_BUCKET=\"${Artifacts}\"\nexport APP_DOMAIN=\"${Domain}\"\nset -euo pipefail\numask 077\n# REGION, ARTIFACT_BUCKET and APP_DOMAIN are supplied by CloudFormation.\ndnf install -y docker awscli-2 python3\nsystemctl enable --now docker\ninstall -d -m 755 /usr/local/lib/docker/cli-plugins\ncurl --fail --silent --show-error --location https://github.com/docker/compose/releases/download/v2.39.4/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose\nchmod 755 /usr/local/lib/docker/cli-plugins/docker-compose\ninstall -d -m 700 /etc/lab-auth\ninstall -d -m 755 /opt/lab-auth\nprintf 'REGION=%s\\nARTIFACT_BUCKET=%s\\nAPP_DOMAIN=%s\\n' \"$REGION\" \"$ARTIFACT_BUCKET\" \"$APP_DOMAIN\" > /etc/lab-auth/deployment.env\nfor attempt in $(seq 1 180); do\n  if aws s3 cp \"s3://$ARTIFACT_BUCKET/releases/source.tar.gz\" /opt/lab-auth/source.tar.gz --region \"$REGION\" --only-show-errors; then break; fi\n  sleep 5\ndone\ntar xzf /opt/lab-auth/source.tar.gz -C /opt/lab-auth\nchmod 700 /opt/lab-auth/infra/update.sh /opt/lab-auth/infra/backup.sh\n/usr/bin/bash /opt/lab-auth/infra/update.sh\ncat > /etc/systemd/system/lab-auth-backup.service <<'UNIT'\n[Unit]\nDescription=Back up Auth Lab PostgreSQL to private encrypted S3\nAfter=docker.service\n[Service]\nType=oneshot\nExecStart=/usr/bin/bash /opt/lab-auth/infra/backup.sh\nUNIT\ncat > /etc/systemd/system/lab-auth-backup.timer <<'UNIT'\n[Unit]\nDescription=Daily Auth Lab database backup\n[Timer]\nOnCalendar=*-*-* 03:10:00 UTC\nRandomizedDelaySec=600\nPersistent=true\n[Install]\nWantedBy=timers.target\nUNIT\nsystemctl daemon-reload\nsystemctl enable --now lab-auth-backup.timer\ntouch /etc/lab-auth/bootstrap-complete\necho 'AUTH_LAB_BOOTSTRAP_COMPLETE'\n"
           }
         }
       }
