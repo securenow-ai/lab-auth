@@ -36,3 +36,6 @@ deployment-output*.json
 !.securenow/runtime.example.json
 !.securenow/credentials.example.json
 !.securenow/credentials.*.example.json
+
+# Attack-simulation local test account (fictional, never commit to this public repo)
+attack-simulation/test-account.local.json
