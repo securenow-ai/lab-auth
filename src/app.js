@@ -5,7 +5,9 @@ import helmet from 'helmet';
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { OAuth2Client, CodeChallengeMethod } from 'google-auth-library';
+import { guard } from 'securenow/sessions';
 import { hashPassword, passwordProblem, verifyPassword } from './passwords.js';
+import { createBridge } from './securenow-bridge.js';
 
 const PgStore = connectPgSimple(session);
 const roles = new Set(['member', 'analyst', 'admin']);
@@ -41,6 +43,7 @@ export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
   }) : null);
   const cookieName = config.production ? '__Host-lab_auth' : 'lab_auth';
   const hash = (value) => createHmac('sha256', config.auditSecret).update(String(value)).digest('hex');
+  const { emit, ref, sessionRef } = createBridge(config);
   const store = new PgStore({
     pool, tableName: 'sessions', createTableIfMissing: false, pruneSessionInterval: 15 * 60,
     errorLog: (...args) => console.error(JSON.stringify({ level: 'error', code: args.find((arg) => arg?.code)?.code || 'SESSION_STORE_ERROR' })),
@@ -99,6 +102,17 @@ export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
     }
     next();
   });
+  // SecureNow sessions: emits session.seen for signed-in users and enforces `securenow revoke`.
+  // The default cookie list does not know this app's cookie, so the extractors are explicit.
+  app.use(guard({
+    getSessionId: (req) => (req.user ? sessionRef(req) : null),
+    getUserId: (req) => req.user?.id ?? null,
+    onRevoked: async (req, res) => {
+      await destroySession(req);
+      res.clearCookie(cookieName, { path: '/', secure: config.production, httpOnly: true, sameSite: 'lax' });
+      return fail(res, 401, 'AUTH_REQUIRED', 'Your session has ended. Sign in to continue.');
+    },
+  }));
   app.use('/api', async (req, res, next) => {
     if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
     if (req.get('origin') !== config.appOrigin || req.get('sec-fetch-site') === 'cross-site' || !safeEqual(req.get('x-csrf-token'), req.session.csrfToken)) {
@@ -131,6 +145,7 @@ export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
     );
     if (rows[0].count > maximum) {
       await event(req, 'auth.rate_limited', 'blocked', { category: name });
+      emit('api.ratelimit.exceeded', req, { userId: req.user?.id, attributes: { scope: name, route: req.path.toLowerCase(), reason: 'fixed_window', ...(account ? { account_ref: ref('acct', identifier) } : {}) } });
       res.setHeader('Retry-After', String(Math.ceil(config.rateWindowMs / 1000)));
       return fail(res, 429, 'RATE_LIMITED', 'Too many attempts. Try again later.');
     }
@@ -168,6 +183,7 @@ export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
     );
     // The response is identical for existing addresses and successful registration.
     await event(req, 'auth.registration_requested', 'success', {}, result.rows[0]?.id || null);
+    emit('auth.signup', req, { userId: result.rows[0]?.id, attributes: { auth_method: 'password', provider: 'local', outcome: result.rows[0] ? 'created' : 'existing', account_ref: ref('acct', email) } });
     res.status(201).json({ user: null, csrfToken: req.session.csrfToken, message: 'If this address can be registered, your account is ready. Sign in to continue.' });
   });
   app.post('/api/auth/login', limit('login-ip', config.authRateLimit), limit('login-account', config.authRateLimit * 2, true), async (req, res) => {
@@ -179,14 +195,19 @@ export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
     const valid = await verifyPassword(password, user?.password_hash);
     if (!valid) {
       await event(req, 'auth.login_failed', 'failure');
+      emit('auth.login.failure', req, { userId: user?.id, attributes: { auth_method: 'password', provider: 'local', reason: user ? 'bad_password' : 'unknown_account', account_ref: ref('acct', email), mfa_state: 'none', sso_required: false } });
       return fail(res, 401, 'INVALID_CREDENTIALS', 'Email or password is incorrect.');
     }
     await authenticate(req, user);
     await event(req, 'auth.login_succeeded', 'success', { method: 'password' });
+    emit('auth.login.success', req, { userId: user.id, attributes: { auth_method: 'password', provider: 'local', account_ref: ref('acct', email), mfa_state: 'none', sso_required: false } });
     res.json({ user: publicUser(user), csrfToken: req.session.csrfToken });
   });
   app.post('/api/auth/logout', async (req, res) => {
-    if (req.user) await event(req, 'auth.logout', 'success');
+    if (req.user) {
+      await event(req, 'auth.logout', 'success');
+      emit('auth.logout', req, { userId: req.user.id });
+    }
     await destroySession(req);
     res.clearCookie(cookieName, { path: '/', secure: config.production, httpOnly: true, sameSite: 'lax' });
     res.json({ ok: true });
@@ -196,14 +217,17 @@ export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
     if (problem) return fail(res, 400, 'INVALID_INPUT', problem);
     if (typeof req.body?.currentPassword !== 'string' || req.body.currentPassword.length > 128 || !await verifyPassword(req.body.currentPassword, req.user.password_hash)) {
       await event(req, 'auth.password_change_failed', 'failure');
+      emit('auth.security.change', req, { userId: req.user.id, attributes: { action: 'password_changed', outcome: 'failure', step_up: true } });
       return fail(res, 401, 'INVALID_CREDENTIALS', 'Current password is incorrect.');
     }
     const { rows } = await pool.query(
       'UPDATE users SET password_hash=$1,session_version=session_version+1,updated_at=now() WHERE id=$2 RETURNING *',
       [await hashPassword(req.body.newPassword), req.user.id],
     );
+    const priorSession = sessionRef(req);
     await authenticate(req, rows[0]);
     await event(req, 'auth.password_changed', 'success');
+    emit('auth.security.change', req, { userId: rows[0].id, sessionId: priorSession, attributes: { action: 'password_changed', outcome: 'completed', step_up: true } });
     res.json({ user: publicUser(rows[0]), csrfToken: req.session.csrfToken });
   });
 
@@ -226,6 +250,7 @@ export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
     await saveSession(req);
     if (!oauth || !safeEqual(req.query.state, oauth.state) || Date.now() - oauth.createdAt > 10 * 60_000 || typeof req.query.code !== 'string' || req.query.code.length > 4096) {
       await event(req, 'auth.google_failed', 'failure', { reason: 'invalid_callback' });
+      emit('auth.login.failure', req, { attributes: { auth_method: 'oauth', provider: 'google', reason: 'invalid_callback' } });
       return res.redirect('/?auth_error=google_failed');
     }
     try {
@@ -242,19 +267,24 @@ export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
           [randomUUID(), email, String(payload.name || 'Google member').slice(0, 80), payload.sub],
         );
         user = result.rows[0];
+        if (user) emit('auth.signup', req, { userId: user.id, attributes: { auth_method: 'oauth', provider: 'google', outcome: 'created', account_ref: ref('acct', email) } });
         // Another successful callback may have created the same subject while this request was in flight.
         if (!user) user = (await pool.query('SELECT * FROM users WHERE google_subject=$1', [payload.sub])).rows[0];
         if (!user) {
           // Email is never sufficient proof for silently linking an existing password identity.
           await event(req, 'auth.google_failed', 'failure', { reason: 'identity_conflict' });
+          emit('auth.login.failure', req, { attributes: { auth_method: 'oauth', provider: 'google', reason: 'identity_conflict', account_ref: ref('acct', email) } });
+          emit('auth.account.link', req, { attributes: { outcome: 'rejected', provider: 'google', verified_email: true, join_key: 'iss_sub', reason: 'existing_email_other_method', account_ref: ref('acct', email) } });
           return res.redirect('/?auth_error=account_exists');
         }
       }
       await authenticate(req, user);
       await event(req, 'auth.login_succeeded', 'success', { method: 'google' });
+      emit('auth.login.success', req, { userId: user.id, attributes: { auth_method: 'oauth', provider: 'google', account_ref: ref('acct', email), mfa_state: 'none', sso_required: false } });
       res.redirect('/?auth=success');
     } catch {
       await event(req, 'auth.google_failed', 'failure', { reason: 'provider_verification' });
+      emit('auth.login.failure', req, { attributes: { auth_method: 'oauth', provider: 'google', reason: 'provider_verification' } });
       res.redirect('/?auth_error=google_failed');
     }
   });
@@ -291,10 +321,14 @@ export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
   app.patch(['/api/admin/users/:id', '/api/admin/users/:id/role'], requireRole('admin'), async (req, res) => {
     if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(req.params.id) || !roles.has(req.body?.role)) return fail(res, 400, 'INVALID_INPUT', 'Choose member, analyst, or admin.');
     if (req.params.id === req.user.id && req.body.role !== 'admin') return fail(res, 409, 'SELF_DEMOTION', 'Ask another administrator to change your role.');
+    const before = (await pool.query('SELECT role FROM users WHERE id=$1', [req.params.id])).rows[0]?.role;
     const { rows } = await pool.query('UPDATE users SET role=$1,session_version=session_version+CASE WHEN role<>$1 THEN 1 ELSE 0 END,updated_at=CASE WHEN role<>$1 THEN now() ELSE updated_at END WHERE id=$2 RETURNING *', [req.body.role, req.params.id]);
     if (!rows[0]) return fail(res, 404, 'NOT_FOUND', 'User not found.');
     // A changed role invalidates existing sessions; the next request must authenticate again.
     await event(req, 'admin.role_changed', 'success', { targetUserId: rows[0].id, role: rows[0].role });
+    const rank = { member: 1, analyst: 2, admin: 3 };
+    const direction = rank[rows[0].role] > rank[before] ? 'elevate' : rank[rows[0].role] < rank[before] ? 'reduce' : 'same';
+    emit('auth.security.change', req, { userId: req.user.id, attributes: { action: 'role_changed', outcome: 'completed', step_up: false, target_ref: rows[0].id, direction } });
     res.json({ user: publicUser(rows[0]) });
   });
   app.use('/api', (_req, res) => fail(res, 404, 'NOT_FOUND', 'API route not found.'));

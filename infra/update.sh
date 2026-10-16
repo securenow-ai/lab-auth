@@ -22,6 +22,14 @@ Path('/etc/lab-auth/app.env').write_text(''.join(k+"='"+v.replace('\\','\\\\').r
 Path('/opt/lab-auth/.env').write_text('POSTGRES_PASSWORD='+s['POSTGRES_PASSWORD']+'\nAPP_DOMAIN='+domain+'\n')
 os.chmod('/etc/lab-auth/app.env',0o600)
 os.chmod('/opt/lab-auth/.env',0o600)
+# SecureNow runtime credential: `npx securenow credentials runtime --env test --stdout`, stored as the
+# SECURENOW_CREDENTIALS_JSON string in the same secret. Readable only by the container's node user (uid 1000).
+creds = s.get('SECURENOW_CREDENTIALS_JSON') or '{}'
+json.loads(creds)
+p = Path('/etc/lab-auth/securenow-credentials.json')
+p.write_text(creds)
+os.chown(p, 1000, 1000)
+os.chmod(p, 0o400)
 PY
 docker compose -f compose.production.yaml build --pull app
 docker compose -f compose.production.yaml up -d db

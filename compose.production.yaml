@@ -31,6 +31,9 @@ services:
     mem_limit: 640m
     read_only: true
     tmpfs: [/tmp]
+    # SecureNow runtime credential (written by infra/update.sh from the lab-auth/runtime secret).
+    volumes:
+      - /etc/lab-auth/securenow-credentials.json:/app/.securenow/credentials.json:ro
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
     logging:

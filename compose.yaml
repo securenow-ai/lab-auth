@@ -27,7 +27,10 @@ services:
       HOST: 0.0.0.0
       PORT: 3000
       DATABASE_URL: postgresql://lab_auth:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/lab_auth
-    command: ["sh", "-c", "node scripts/migrate.js && exec node src/server.js"]
+    command: ["sh", "-c", "node scripts/migrate.js && exec node -r securenow/register src/server.js"]
+    # Local SecureNow credentials from `npx securenow app connect` (gitignored, read-only).
+    volumes:
+      - ./.securenow:/app/.securenow:ro
     ports:
       - "127.0.0.1:3000:3000"
     init: true

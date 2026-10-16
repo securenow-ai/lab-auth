@@ -27,3 +27,12 @@ backups/
 .deployment/
 deployment-state*.json
 deployment-output*.json
+
+# SecureNow local credential files
+# Keep .securenow/ itself trackable for repo-owned docs/templates.
+.securenow/credentials.json
+.securenow/credentials.*.json
+!.securenow/admin.example.json
+!.securenow/runtime.example.json
+!.securenow/credentials.example.json
+!.securenow/credentials.*.example.json

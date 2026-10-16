@@ -67,6 +67,8 @@ npx securenow credentials runtime --env test
 
 Store and mount the generated file privately at the project runtime path supported by the SDK, such as `/app/.securenow/credentials.json`, readable only by the runtime user. Do not bake it into an image or copy admin authentication into the container. The repository ignores credential filenames and excludes `.securenow` from the build context. Add the SDK to the production build and change the app command to `node -r securenow/register src/server.js` only when ready for the instrumentation exercise.
 
+On the instrumented tutorial branch this wiring is in place. The Dockerfile starts with the preload, and `compose.production.yaml` mounts `/etc/lab-auth/securenow-credentials.json` read-only at `/app/.securenow/credentials.json`. `infra/update.sh` writes that file from an optional `SECURENOW_CREDENTIALS_JSON` string in the `lab-auth/runtime` secret (the `--stdout` output of the command above), owned by the container's `node` user with mode `0400`. Without that key the file is `{}` and the SDK stays idle. Add the key from a private terminal without printing it, then run the update script.
+
 Confirm the observed client IP is the real test client. Caddy overwrites `X-Forwarded-For`, the app trusts a single proxy hop, and app/database ports stay private. The SDK has its own IP-resolution configuration; verify it at the SDK layer too. Never fix incorrect IP attribution by trusting forwarded headers from every public client.
 
 ## 3. Observe events before writing detectors
