@@ -110,6 +110,10 @@ export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
     onRevoked: async (req, res) => {
       await destroySession(req);
       res.clearCookie(cookieName, { path: '/', secure: config.production, httpOnly: true, sameSite: 'lax' });
+      // A page load gets the sign-in page; API calls keep the JSON error the single-page app expects.
+      if (req.method === 'GET' && !req.path.startsWith('/api/') && req.accepts(['json', 'html']) === 'html') {
+        return res.redirect(303, '/');
+      }
       return fail(res, 401, 'AUTH_REQUIRED', 'Your session has ended. Sign in to continue.');
     },
   }));

@@ -57,6 +57,8 @@ node -r securenow/register src/server.js
 npx securenow doctor
 ```
 
+The integration tests set `SECURENOW_DISABLED=1` (securenow 8.12.2 or later), so a test run never reports events, traces or session checks to your real SecureNow app.
+
 The equivalent launch is `npx securenow run src/server.js`. Keep the package version and lockfile in the tutorial branch, and record the exact tested SDK version. The unmodified Docker image continues to use its baseline command until you deliberately update the deployment command.
 
 For a deployed copy, generate a runtime-only credential file using:
@@ -69,7 +71,7 @@ Store and mount the generated file privately at the project runtime path support
 
 On the instrumented tutorial branch this wiring is in place. The Dockerfile starts with the preload, and `compose.production.yaml` mounts `/etc/lab-auth/securenow-credentials.json` read-only at `/app/.securenow/credentials.json`. `infra/update.sh` writes that file from an optional `SECURENOW_CREDENTIALS_JSON` string in the `lab-auth/runtime` secret (the `--stdout` output of the command above), owned by the container's `node` user with mode `0400`. Without that key the file is `{}` and the SDK stays idle. Add the key from a private terminal without printing it, then run the update script.
 
-The first release that adds this wiring needs the update script twice. `update.sh` extracts the new release over itself while it runs, so that run still executes the previous script, and Docker creates an empty directory at the missing mount source. Remove that empty directory (`rmdir /etc/lab-auth/securenow-credentials.json`), run `update.sh` again, then recreate the app container (`docker compose -f compose.production.yaml up -d --force-recreate app`). Confirm the app log shows `apiKey=set` and your lab app key before relying on telemetry.
+`update.sh` re-runs itself once when a release changes it, so a release always deploys with its own script. It also removes an empty directory that Docker may have created at a missing mount source, and recreates the app container when the SecureNow credential changes, because the SDK reads it at start. A release made before this behaviour existed still runs the older script on its first deploy; if the app log does not show `apiKey=set` afterwards, run `update.sh` once more. Confirm the app log shows `apiKey=set` and your lab app key before relying on telemetry.
 
 Confirm the observed client IP is the real test client. Caddy overwrites `X-Forwarded-For`, the app trusts a single proxy hop, and app/database ports stay private. The SDK has its own IP-resolution configuration; verify it at the SDK layer too. Never fix incorrect IP attribution by trusting forwarded headers from every public client.
 

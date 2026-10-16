@@ -7,6 +7,9 @@ import { createPool, migrate } from '../src/db.js';
 import { hashPassword } from '../src/passwords.js';
 import { bootstrapAdmin } from '../src/bootstrap.js';
 
+// Tests must never report to the real SecureNow app through the project's .securenow credentials.
+process.env.SECURENOW_DISABLED ??= '1';
+
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const enabled = Boolean(databaseUrl);
 if (enabled && !/(^|[_-])test($|[_-])/i.test(new URL(databaseUrl).pathname.slice(1))) {
