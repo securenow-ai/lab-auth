@@ -69,6 +69,8 @@ Store and mount the generated file privately at the project runtime path support
 
 On the instrumented tutorial branch this wiring is in place. The Dockerfile starts with the preload, and `compose.production.yaml` mounts `/etc/lab-auth/securenow-credentials.json` read-only at `/app/.securenow/credentials.json`. `infra/update.sh` writes that file from an optional `SECURENOW_CREDENTIALS_JSON` string in the `lab-auth/runtime` secret (the `--stdout` output of the command above), owned by the container's `node` user with mode `0400`. Without that key the file is `{}` and the SDK stays idle. Add the key from a private terminal without printing it, then run the update script.
 
+The first release that adds this wiring needs the update script twice. `update.sh` extracts the new release over itself while it runs, so that run still executes the previous script, and Docker creates an empty directory at the missing mount source. Remove that empty directory (`rmdir /etc/lab-auth/securenow-credentials.json`), run `update.sh` again, then recreate the app container (`docker compose -f compose.production.yaml up -d --force-recreate app`). Confirm the app log shows `apiKey=set` and your lab app key before relying on telemetry.
+
 Confirm the observed client IP is the real test client. Caddy overwrites `X-Forwarded-For`, the app trusts a single proxy hop, and app/database ports stay private. The SDK has its own IP-resolution configuration; verify it at the SDK layer too. Never fix incorrect IP attribution by trusting forwarded headers from every public client.
 
 ## 3. Observe events before writing detectors
