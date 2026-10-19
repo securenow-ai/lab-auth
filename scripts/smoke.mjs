@@ -30,11 +30,13 @@ assert.equal((await member.request('/readyz')).status, 200);
 const anonymous = await member.request('/api/me');
 assert.equal(anonymous.data.user, null);
 assert.equal(anonymous.headers.get('cache-control'), 'no-store');
+// F1: an anonymous visitor gets a signed double-submit CSRF cookie, not a persisted session.
 const cookie = anonymous.headers.get('set-cookie');
 assert.match(cookie, /HttpOnly/i);
-assert.match(cookie, /SameSite=Lax/i);
-if (base.startsWith('https:')) { assert.match(cookie, /Secure/i); assert.match(cookie, /^__Host-lab_auth=/); }
-assert.equal((await member.request('/API/ME')).headers.get('cache-control'), 'no-store');
+assert.match(cookie, /SameSite=Strict/i);
+if (base.startsWith('https:')) { assert.match(cookie, /Secure/i); assert.match(cookie, /^__Host-lab_csrf=/); }
+// F6: case/trailing-slash aliases now return 404 (lower-cased cache header stays as defense in depth).
+assert.equal((await member.request('/API/ME')).status, 404);
 checks.push('HTTPS/readiness, session cookie, and private-response cache headers');
 assert.equal((await member.request('/api/auth/register', 'POST', { name: 'Fictional smoke-test member', email, password, role: 'admin' })).status, 201);
 assert.equal((await member.request('/api/dashboard')).status, 401);

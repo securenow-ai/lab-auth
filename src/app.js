@@ -35,6 +35,10 @@ function publicUser(row) {
 
 export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
   const app = express();
+  // F6: match routes exactly, so /API/AUTH/LOGIN and /api/auth/login/ return 404 and cannot sidestep
+  // SecureNow's route-scoped controls (which compare the path exactly and case-sensitively).
+  app.set('case sensitive routing', true);
+  app.set('strict routing', true);
   const googleEnabled = Boolean(config.googleClientId && config.googleClientSecret);
   const googleClient = suppliedOauthClient || (googleEnabled ? new OAuth2Client({
     clientId: config.googleClientId,

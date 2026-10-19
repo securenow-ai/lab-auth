@@ -106,6 +106,19 @@ test('real PostgreSQL: anonymous requests never create a session row (F1)', { sk
   assert.equal((await pool.query('SELECT count(*) FROM sessions')).rows[0].count, '1');
 });
 
+test('real PostgreSQL: routing is strict and case-sensitive so aliases return 404 (F6)', { skip: !enabled }, async () => {
+  const c = await client();
+  await c.init();
+  // Canonical routes still work.
+  assert.equal((await c.request('/api/me')).status, 200);
+  assert.equal((await c.login('nobody@example.com', 'wrong')).status, 401);
+  // Case and trailing-slash aliases no longer match any route.
+  assert.equal((await c.request('/API/ME')).status, 404);
+  assert.equal((await c.request('/api/me/')).status, 404);
+  assert.equal((await c.request('/API/AUTH/LOGIN', { method: 'POST', body: { email: 'a@b.co', password: 'x' } })).status, 404);
+  assert.equal((await c.request('/api/auth/login/', { method: 'POST', body: { email: 'a@b.co', password: 'x' } })).status, 404);
+});
+
 test('real PostgreSQL: rejected requests are audit-capped per window and filterable by type (F2)', { skip: !enabled }, async () => {
   const c = await client();
   await c.init();
