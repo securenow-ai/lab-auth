@@ -106,6 +106,28 @@ test('real PostgreSQL: anonymous requests never create a session row (F1)', { sk
   assert.equal((await pool.query('SELECT count(*) FROM sessions')).rows[0].count, '1');
 });
 
+test('real PostgreSQL: the account limit cannot lock out an owner with a device cookie (F3)', { skip: !enabled }, async () => {
+  const cfg = { authRateLimit: 5 }; // login-ip limit 5, per-account failure limit 10
+  const xff = (ip) => ({ 'x-forwarded-for': ip });
+  // Owner registers and signs in once from their browser -> receives a device-trust cookie.
+  const owner = await client({ config: cfg });
+  await owner.request('/api/me', { headers: xff('198.51.100.1') });
+  await owner.request('/api/auth/register', { method: 'POST', body: { name: 'Owner', email: 'owner@example.com', password }, headers: xff('198.51.100.1') });
+  assert.equal((await owner.request('/api/auth/login', { method: 'POST', body: { email: 'owner@example.com', password }, headers: xff('198.51.100.1') })).status, 200);
+  // Attacker spreads 12 failed attempts over 3 IPs (4 each, under the per-IP limit) to fill the account bucket.
+  const atk = await client({ config: cfg });
+  await atk.request('/api/me', { headers: xff('203.0.113.1') });
+  for (const ip of ['203.0.113.1', '203.0.113.2', '203.0.113.3']) {
+    for (let i = 0; i < 4; i += 1) await atk.request('/api/auth/login', { method: 'POST', body: { email: 'owner@example.com', password: 'wrong' }, headers: xff(ip) });
+  }
+  // A brand-new browser (no device cookie) is locked out, even with the right password.
+  const fresh = await client({ config: cfg });
+  await fresh.request('/api/me', { headers: xff('203.0.113.9') });
+  assert.equal((await fresh.request('/api/auth/login', { method: 'POST', body: { email: 'owner@example.com', password }, headers: xff('203.0.113.9') })).status, 429);
+  // The owner's own browser still signs in, because the device cookie bypasses the account bucket.
+  assert.equal((await owner.request('/api/auth/login', { method: 'POST', body: { email: 'owner@example.com', password }, headers: xff('198.51.100.1') })).status, 200);
+});
+
 test('real PostgreSQL: routing is strict and case-sensitive so aliases return 404 (F6)', { skip: !enabled }, async () => {
   const c = await client();
   await c.init();

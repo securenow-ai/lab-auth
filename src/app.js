@@ -57,6 +57,22 @@ export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
     const dot = value.indexOf('.');
     return dot > 0 && safeEqual(value, signCsrf(value.slice(0, dot))) ? value : '';
   };
+  // F3: a signed device-trust cookie (bound to the account) lets a returning owner skip the per-account
+  // limit, so an attacker cannot hold a known member out. The account bucket counts failures only.
+  const deviceCookieName = config.production ? '__Host-lab_device' : 'lab_device';
+  const deviceMac = (id, email) => createHmac('sha256', config.sessionSecret).update(`${id}:${hash(email)}`).digest('base64url');
+  const signDevice = (email) => { const id = csrf(); return `${id}.${deviceMac(id, email)}`; };
+  const verifyDevice = (req, email) => {
+    const part = (req.headers.cookie || '').split(';').map((c) => c.trim()).find((c) => c.startsWith(`${deviceCookieName}=`));
+    const value = part ? part.slice(deviceCookieName.length + 1) : '';
+    const dot = value.indexOf('.');
+    return dot > 0 && safeEqual(value, `${value.slice(0, dot)}.${deviceMac(value.slice(0, dot), email)}`);
+  };
+  const windowStart = () => Math.floor(Date.now() / config.rateWindowMs);
+  const readBucket = async (key) => Number((await pool.query('SELECT count FROM rate_buckets WHERE key=$1 AND window_start=$2', [key, windowStart()])).rows[0]?.count ?? 0);
+  const bumpBucket = async (key) => Number((await pool.query(
+    `INSERT INTO rate_buckets(key,window_start,count) VALUES($1,$2,1)
+     ON CONFLICT(key,window_start) DO UPDATE SET count=rate_buckets.count+1 RETURNING count`, [key, windowStart()])).rows[0].count);
   const store = new PgStore({
     pool, tableName: 'sessions', createTableIfMissing: false, pruneSessionInterval: 15 * 60,
     errorLog: (...args) => console.error(JSON.stringify({ level: 'error', code: args.find((arg) => arg?.code)?.code || 'SESSION_STORE_ERROR' })),
@@ -221,19 +237,29 @@ export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
     emit('auth.signup', req, { userId: result.rows[0]?.id, attributes: { auth_method: 'password', provider: 'local', outcome: result.rows[0] ? 'created' : 'existing', account_ref: ref('acct', email) } });
     res.status(201).json({ user: null, csrfToken: req.session.csrfToken || readCsrf(req), message: 'If this address can be registered, your account is ready. Sign in to continue.' });
   });
-  app.post('/api/auth/login', limit('login-ip', config.authRateLimit), limit('login-account', config.authRateLimit * 2, true), async (req, res) => {
+  app.post('/api/auth/login', limit('login-ip', config.authRateLimit), async (req, res) => {
     const email = normalizeEmail(req.body?.email);
     const password = req.body?.password;
     if (typeof password !== 'string' || password.length > 128 || email.length > 254) return fail(res, 400, 'INVALID_INPUT', 'Enter an email address and password.');
+    // F3: a returning owner (valid device cookie) is exempt; the account bucket counts failed attempts only.
+    const accountKey = `login-account:${hash(email)}`;
+    const trusted = verifyDevice(req, email);
+    if (!trusted && await readBucket(accountKey) >= config.authRateLimit * 2) {
+      emit('api.ratelimit.exceeded', req, { attributes: { scope: 'login-account', route: '/api/auth/login', reason: 'fixed_window', account_ref: ref('acct', email) } });
+      res.setHeader('Retry-After', String(Math.ceil(config.rateWindowMs / 1000)));
+      return fail(res, 429, 'RATE_LIMITED', 'Too many attempts. Try again later.');
+    }
     const { rows } = await pool.query('SELECT * FROM users WHERE email=$1', [email]);
     const user = rows[0];
     const valid = await verifyPassword(password, user?.password_hash);
     if (!valid) {
+      if (!trusted) await bumpBucket(accountKey);
       await event(req, 'auth.login_failed', 'failure');
       emit('auth.login.failure', req, { userId: user?.id, attributes: { auth_method: 'password', provider: 'local', reason: user ? 'bad_password' : 'unknown_account', account_ref: ref('acct', email), mfa_state: 'none', sso_required: false } });
       return fail(res, 401, 'INVALID_CREDENTIALS', 'Email or password is incorrect.');
     }
     await authenticate(req, user);
+    res.cookie(deviceCookieName, signDevice(email), { httpOnly: true, secure: config.production, sameSite: 'lax', path: '/', maxAge: 400 * 24 * 60 * 60_000 });
     await event(req, 'auth.login_succeeded', 'success', { method: 'password' });
     emit('auth.login.success', req, { userId: user.id, attributes: { auth_method: 'password', provider: 'local', account_ref: ref('acct', email), mfa_state: 'none', sso_required: false } });
     res.json({ user: publicUser(user), csrfToken: req.session.csrfToken });
