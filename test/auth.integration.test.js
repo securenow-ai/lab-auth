@@ -106,6 +106,30 @@ test('real PostgreSQL: anonymous requests never create a session row (F1)', { sk
   assert.equal((await pool.query('SELECT count(*) FROM sessions')).rows[0].count, '1');
 });
 
+test('real PostgreSQL: rejected requests are audit-capped per window and filterable by type (F2)', { skip: !enabled }, async () => {
+  const c = await client();
+  await c.init();
+  // 100 CSRF-rejected mutations from one client -> at most one csrf.rejected row this window.
+  for (let i = 0; i < 100; i += 1) assert.equal((await c.request('/api/auth/logout', { method: 'POST', body: {}, csrf: false })).status, 403);
+  assert.equal((await pool.query("SELECT count(*) FROM security_events WHERE type='csrf.rejected'")).rows[0].count, '1');
+  // An analyst/admin can filter the security page by event type (done before the shared per-IP
+  // login limit is exhausted below).
+  const a = await client();
+  await a.init();
+  await a.register('admin@example.com');
+  await pool.query("UPDATE users SET role='admin' WHERE email='admin@example.com'");
+  assert.equal((await a.login('admin@example.com')).status, 200);
+  const sec = await a.request('/api/security?type=csrf.rejected');
+  assert.equal(sec.status, 200);
+  assert.ok(sec.data.events.length >= 1 && sec.data.events.every((e) => e.type === 'csrf.rejected'));
+  // Over-limit login attempts log auth.rate_limited at most once per category per window.
+  await c.register('victim@example.com');
+  for (let i = 0; i < 10; i += 1) await c.login('victim@example.com', 'wrong');
+  for (const row of (await pool.query("SELECT metadata->>'category' c, count(*) n FROM security_events WHERE type='auth.rate_limited' GROUP BY 1")).rows) {
+    assert.equal(row.n, '1', `category ${row.c} logged ${row.n} times`);
+  }
+});
+
 test('real PostgreSQL: login rotates sessions, CSRF rejects cross-origin mutations, logout revokes access', { skip: !enabled }, async () => {
   const c = await client();
   await c.init();
@@ -146,7 +170,8 @@ test('real PostgreSQL: failed login is generic and durable rate limiting blocks 
   const second = await client();
   await second.init();
   assert.equal((await second.login()).status, 429);
-  assert.equal((await pool.query("SELECT count(*) FROM security_events WHERE type='auth.rate_limited'")).rows[0].count, '2');
+  // F2: auth.rate_limited is capped to one row per (category, window), not one per blocked request.
+  assert.equal((await pool.query("SELECT count(*) FROM security_events WHERE type='auth.rate_limited'")).rows[0].count, '1');
 });
 
 test('real PostgreSQL: role gates hold server-side and role changes revoke sessions', { skip: !enabled }, async () => {

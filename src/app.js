@@ -130,7 +130,14 @@ export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
     if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
     const expectedCsrf = req.session.csrfToken || readCsrf(req);
     if (req.get('origin') !== config.appOrigin || req.get('sec-fetch-site') === 'cross-site' || !expectedCsrf || !safeEqual(req.get('x-csrf-token'), expectedCsrf)) {
-      await event(req, 'csrf.rejected', 'blocked');
+      // F2: cap audit writes — log at most one csrf.rejected per IP per window.
+      const windowStart = Math.floor(Date.now() / config.rateWindowMs);
+      const { rows } = await pool.query(
+        `INSERT INTO rate_buckets(key,window_start,count) VALUES($1,$2,1)
+         ON CONFLICT(key,window_start) DO UPDATE SET count=rate_buckets.count+1 RETURNING count`,
+        [`csrf-reject:${hash(req.ip)}`, windowStart],
+      );
+      if (rows[0].count === 1) await event(req, 'csrf.rejected', 'blocked');
       return fail(res, 403, 'CSRF_REJECTED', 'This request could not be verified. Refresh the page and try again.');
     }
     if (!req.is('application/json')) return fail(res, 415, 'JSON_REQUIRED', 'Send requests as application/json.');
@@ -158,7 +165,8 @@ export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
       [`${name}:${hash(identifier)}`, windowStart],
     );
     if (rows[0].count > maximum) {
-      await event(req, 'auth.rate_limited', 'blocked', { category: name });
+      // F2: record at most one rejection per (category, client) per window.
+      if (rows[0].count === maximum + 1) await event(req, 'auth.rate_limited', 'blocked', { category: name });
       emit('api.ratelimit.exceeded', req, { userId: req.user?.id, attributes: { scope: name, route: req.path.toLowerCase(), reason: 'fixed_window', ...(account ? { account_ref: ref('acct', identifier) } : {}) } });
       res.setHeader('Retry-After', String(Math.ceil(config.rateWindowMs / 1000)));
       return fail(res, 429, 'RATE_LIMITED', 'Too many attempts. Try again later.');
@@ -329,8 +337,13 @@ export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
     team: [ { id: 'demo-a', name: 'Alex Rivera', role: 'Product lead', avatar: 'AR' }, { id: 'demo-m', name: 'Morgan Chen', role: 'Engineer', avatar: 'MC' }, { id: 'demo-j', name: 'Jamie Taylor', role: 'Designer', avatar: 'JT' } ],
   }));
   app.get('/api/security', requireRole('analyst', 'admin'), async (req, res) => {
+    // F2: let analysts filter by event type so a flood of one type cannot hide another.
+    const type = typeof req.query.type === 'string' && /^[a-z0-9._-]{1,64}$/.test(req.query.type) ? req.query.type : null;
     const [events, sessions] = await Promise.all([
-      pool.query('SELECT id,type,outcome,actor_id,request_id,metadata,created_at FROM security_events ORDER BY created_at DESC,id DESC LIMIT 100'),
+      pool.query(
+        `SELECT id,type,outcome,actor_id,request_id,metadata,created_at FROM security_events${type ? ' WHERE type=$1' : ''} ORDER BY created_at DESC,id DESC LIMIT 100`,
+        type ? [type] : [],
+      ),
       pool.query(`SELECT sid,sess,expire FROM sessions WHERE sess->>'userId'=$1 AND expire>now() AND (sess->>'version')::int=$2 ORDER BY expire DESC LIMIT 20`, [req.user.id, req.user.session_version]),
     ]);
     res.json({
