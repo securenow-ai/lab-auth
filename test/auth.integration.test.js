@@ -209,6 +209,25 @@ test('real PostgreSQL: failed login is generic and durable rate limiting blocks 
   assert.equal((await pool.query("SELECT count(*) FROM security_events WHERE type='auth.rate_limited'")).rows[0].count, '1');
 });
 
+test('real PostgreSQL: admin role changes require recent re-authentication (F5)', { skip: !enabled }, async () => {
+  const c = await client({ config: { authRateLimit: 20 } });
+  await c.init();
+  await c.register('admin@example.com');
+  await pool.query("UPDATE users SET role='admin' WHERE email='admin@example.com'");
+  await c.login('admin@example.com');
+  await c.register('target@example.com');
+  const target = (await pool.query("SELECT id FROM users WHERE email='target@example.com'")).rows[0];
+  // Without step-up, a role change is refused.
+  assert.equal((await c.request(`/api/admin/users/${target.id}`, { method: 'PATCH', body: { role: 'analyst' } })).status, 403);
+  // A wrong password does not grant step-up.
+  assert.equal((await c.request('/api/auth/reauth', { method: 'POST', body: { password: 'wrong' } })).status, 401);
+  assert.equal((await c.request(`/api/admin/users/${target.id}`, { method: 'PATCH', body: { role: 'analyst' } })).status, 403);
+  // Re-authenticate, then the role change succeeds.
+  assert.equal((await c.request('/api/auth/reauth', { method: 'POST', body: { password } })).status, 200);
+  assert.equal((await c.request(`/api/admin/users/${target.id}`, { method: 'PATCH', body: { role: 'analyst' } })).status, 200);
+  assert.equal((await pool.query("SELECT role FROM users WHERE email='target@example.com'")).rows[0].role, 'analyst');
+});
+
 test('real PostgreSQL: role gates hold server-side and role changes revoke sessions', { skip: !enabled }, async () => {
   const c = await client({ config: { authRateLimit: 20 } });
   await c.init(); await c.register(); await c.login();
@@ -220,6 +239,8 @@ test('real PostgreSQL: role gates hold server-side and role changes revoke sessi
   await pool.query("INSERT INTO users(id,email,name,password_hash,role) VALUES($1,'admin@example.com','Administrator',$2,'admin')", [adminId, await hashPassword(password)]);
   const admin = await client({ config: { authRateLimit: 20 } });
   await admin.init(); await admin.login('admin@example.com');
+  // F5: role changes now require a recent re-authentication (step-up).
+  assert.equal((await admin.request('/api/auth/reauth', { method: 'POST', body: { password } })).status, 200);
   assert.equal((await admin.request(`/api/admin/users/${adminId}`, { method: 'PATCH', body: { role: 'admin' } })).status, 200);
   assert.equal((await admin.request('/api/admin/users')).status, 200);
   assert.equal((await admin.request(`/api/admin/users/${adminId}`, { method: 'PATCH', body: { role: 'member' } })).status, 409);

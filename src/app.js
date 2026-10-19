@@ -292,6 +292,17 @@ export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
     emit('auth.security.change', req, { userId: rows[0].id, sessionId: priorSession, attributes: { action: 'password_changed', outcome: 'completed', step_up: true } });
     res.json({ user: publicUser(rows[0]), csrfToken: req.session.csrfToken });
   });
+  // F5: step-up re-authentication. A sensitive action (admin role change) requires a password check
+  // in the last 5 minutes. Google-only admins would re-auth through Google (prompt=login) — left as a plan.
+  app.post('/api/auth/reauth', requireUser, limit('reauth-ip', 5), async (req, res) => {
+    if (typeof req.body?.password !== 'string' || req.body.password.length > 128 || !await verifyPassword(req.body.password, req.user.password_hash)) {
+      await event(req, 'auth.reauth_failed', 'failure');
+      return fail(res, 401, 'INVALID_CREDENTIALS', 'Password is incorrect.');
+    }
+    req.session.reauthAt = Date.now();
+    await saveSession(req);
+    res.json({ ok: true });
+  });
 
   app.get('/api/auth/google', limit('google-ip', 30), async (req, res) => {
     if (!googleEnabled) return fail(res, 503, 'GOOGLE_NOT_CONFIGURED', 'Google sign-in is not configured for this deployment.');
@@ -388,6 +399,10 @@ export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
   app.patch(['/api/admin/users/:id', '/api/admin/users/:id/role'], requireRole('admin'), async (req, res) => {
     if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(req.params.id) || !roles.has(req.body?.role)) return fail(res, 400, 'INVALID_INPUT', 'Choose member, analyst, or admin.');
     if (req.params.id === req.user.id && req.body.role !== 'admin') return fail(res, 409, 'SELF_DEMOTION', 'Ask another administrator to change your role.');
+    // F5: require a password re-check in the last 5 minutes before changing a role.
+    if (!(req.session.reauthAt && Date.now() - req.session.reauthAt < 5 * 60_000)) {
+      return fail(res, 403, 'STEP_UP_REQUIRED', 'Re-enter your password, then change the role.');
+    }
     const before = (await pool.query('SELECT role FROM users WHERE id=$1', [req.params.id])).rows[0]?.role;
     const { rows } = await pool.query('UPDATE users SET role=$1,session_version=session_version+CASE WHEN role<>$1 THEN 1 ELSE 0 END,updated_at=CASE WHEN role<>$1 THEN now() ELSE updated_at END WHERE id=$2 RETURNING *', [req.body.role, req.params.id]);
     if (!rows[0]) return fail(res, 404, 'NOT_FOUND', 'User not found.');
@@ -395,7 +410,7 @@ export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
     await event(req, 'admin.role_changed', 'success', { targetUserId: rows[0].id, role: rows[0].role });
     const rank = { member: 1, analyst: 2, admin: 3 };
     const direction = rank[rows[0].role] > rank[before] ? 'elevate' : rank[rows[0].role] < rank[before] ? 'reduce' : 'same';
-    emit('auth.security.change', req, { userId: req.user.id, attributes: { action: 'role_changed', outcome: 'completed', step_up: false, target_ref: rows[0].id, direction } });
+    emit('auth.security.change', req, { userId: req.user.id, attributes: { action: 'role_changed', outcome: 'completed', step_up: true, target_ref: rows[0].id, direction } });
     res.json({ user: publicUser(rows[0]) });
   });
   app.use('/api', (_req, res) => fail(res, 404, 'NOT_FOUND', 'API route not found.'));
