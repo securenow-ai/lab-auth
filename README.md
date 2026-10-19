@@ -8,6 +8,13 @@ A small, fictional workspace application for learning authentication threat mode
 
 This repository is the application and deployment foundation for the tutorial. The recorded tutorial, a SecureNow threat-model report, custom detection rules, and alert-delivery evidence belong to the next phase. The baseline starts without the SecureNow SDK, so the later instrumentation step is visible and reproducible. Use fictional data in the public demo.
 
+## Following the series
+
+This is the companion app for the **How to Secure Your Apps** video series. One app carries the whole series — authentication threat modeling first, then detections, then code fixes, episode by episode.
+
+- **Start from scratch** — this `main` branch (tagged [`start-here`](https://github.com/securenow-ai/lab-auth/releases/tag/start-here)) is the raw application *before* any SecureNow threat modeling, detection rules, or security fixes. Clone it to begin from zero.
+- **See everything we build** — the full series lives on the [`tutorial/securenow`](https://github.com/securenow-ai/lab-auth/tree/tutorial/securenow) branch: the generated threat-model reports, the detection rules, the code fixes, and the attack-simulation harness, added episode by episode. [Compare the branches](https://github.com/securenow-ai/lab-auth/compare/main...tutorial/securenow) to see exactly what each episode changed.
+
 ## What is included
 
 - Email/password registration and sign-in, Google OpenID Connect sign-in, and sign-out.
