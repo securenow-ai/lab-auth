@@ -96,6 +96,16 @@ test('real PostgreSQL: registration is generic, ignores role injection, and stor
   assert.equal((await c.request('/api/dashboard')).status, 401);
 });
 
+test('real PostgreSQL: anonymous requests never create a session row (F1)', { skip: !enabled }, async () => {
+  const c = await client();
+  for (let i = 0; i < 65; i += 1) assert.equal((await c.request('/api/me')).status, 200);
+  assert.equal((await pool.query('SELECT count(*) FROM sessions')).rows[0].count, '0');
+  // A signed double-submit CSRF cookie still lets an anonymous visitor register and sign in.
+  assert.equal((await c.register()).status, 201);
+  assert.equal((await c.login()).status, 200);
+  assert.equal((await pool.query('SELECT count(*) FROM sessions')).rows[0].count, '1');
+});
+
 test('real PostgreSQL: login rotates sessions, CSRF rejects cross-origin mutations, logout revokes access', { skip: !enabled }, async () => {
   const c = await client();
   await c.init();

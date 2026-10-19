@@ -44,6 +44,15 @@ export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
   const cookieName = config.production ? '__Host-lab_auth' : 'lab_auth';
   const hash = (value) => createHmac('sha256', config.auditSecret).update(String(value)).digest('hex');
   const { emit, ref, sessionRef } = createBridge(config);
+  // F1: anonymous CSRF is a signed double-submit cookie, so a cookieless GET never persists a session row.
+  const csrfCookieName = config.production ? '__Host-lab_csrf' : 'lab_csrf';
+  const signCsrf = (nonce) => `${nonce}.${createHmac('sha256', config.sessionSecret).update(nonce).digest('base64url')}`;
+  const readCsrf = (req) => {
+    const part = (req.headers.cookie || '').split(';').map((c) => c.trim()).find((c) => c.startsWith(`${csrfCookieName}=`));
+    const value = part ? part.slice(csrfCookieName.length + 1) : '';
+    const dot = value.indexOf('.');
+    return dot > 0 && safeEqual(value, signCsrf(value.slice(0, dot))) ? value : '';
+  };
   const store = new PgStore({
     pool, tableName: 'sessions', createTableIfMissing: false, pruneSessionInterval: 15 * 60,
     errorLog: (...args) => console.error(JSON.stringify({ level: 'error', code: args.find((arg) => arg?.code)?.code || 'SESSION_STORE_ERROR' })),
@@ -119,7 +128,8 @@ export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
   }));
   app.use('/api', async (req, res, next) => {
     if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
-    if (req.get('origin') !== config.appOrigin || req.get('sec-fetch-site') === 'cross-site' || !safeEqual(req.get('x-csrf-token'), req.session.csrfToken)) {
+    const expectedCsrf = req.session.csrfToken || readCsrf(req);
+    if (req.get('origin') !== config.appOrigin || req.get('sec-fetch-site') === 'cross-site' || !expectedCsrf || !safeEqual(req.get('x-csrf-token'), expectedCsrf)) {
       await event(req, 'csrf.rejected', 'blocked');
       return fail(res, 403, 'CSRF_REJECTED', 'This request could not be verified. Refresh the page and try again.');
     }
@@ -166,12 +176,21 @@ export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
     await saveSession(req);
     req.user = user;
   }
-  const sessionResponse = (req) => {
-    req.session.csrfToken ||= csrf();
-    return { user: req.user ? publicUser(req.user) : null, csrfToken: req.session.csrfToken, googleEnabled };
+  const sessionResponse = (req, res) => {
+    if (req.user || req.session.userId) {
+      req.session.csrfToken ||= csrf();
+      return { user: req.user ? publicUser(req.user) : null, csrfToken: req.session.csrfToken, googleEnabled };
+    }
+    // Anonymous: issue the token as a signed cookie instead of persisting a session (F1).
+    let value = readCsrf(req);
+    if (!value) {
+      value = signCsrf(csrf());
+      res.cookie(csrfCookieName, value, { httpOnly: true, secure: config.production, sameSite: 'strict', path: '/', maxAge: config.idleSessionMs });
+    }
+    return { user: null, csrfToken: value, googleEnabled };
   };
-  app.get(['/api/me', '/api/auth/session'], (req, res) => res.json(sessionResponse(req)));
-  app.get('/api/auth/csrf', (req, res) => res.json({ csrfToken: sessionResponse(req).csrfToken }));
+  app.get(['/api/me', '/api/auth/session'], (req, res) => res.json(sessionResponse(req, res)));
+  app.get('/api/auth/csrf', (req, res) => res.json({ csrfToken: sessionResponse(req, res).csrfToken }));
 
   app.post('/api/auth/register', limit('register-ip', config.registrationRateLimit), async (req, res) => {
     const email = normalizeEmail(req.body?.email);
@@ -188,7 +207,7 @@ export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
     // The response is identical for existing addresses and successful registration.
     await event(req, 'auth.registration_requested', 'success', {}, result.rows[0]?.id || null);
     emit('auth.signup', req, { userId: result.rows[0]?.id, attributes: { auth_method: 'password', provider: 'local', outcome: result.rows[0] ? 'created' : 'existing', account_ref: ref('acct', email) } });
-    res.status(201).json({ user: null, csrfToken: req.session.csrfToken, message: 'If this address can be registered, your account is ready. Sign in to continue.' });
+    res.status(201).json({ user: null, csrfToken: req.session.csrfToken || readCsrf(req), message: 'If this address can be registered, your account is ready. Sign in to continue.' });
   });
   app.post('/api/auth/login', limit('login-ip', config.authRateLimit), limit('login-account', config.authRateLimit * 2, true), async (req, res) => {
     const email = normalizeEmail(req.body?.email);
@@ -214,6 +233,7 @@ export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
     }
     await destroySession(req);
     res.clearCookie(cookieName, { path: '/', secure: config.production, httpOnly: true, sameSite: 'lax' });
+    res.clearCookie(csrfCookieName, { path: '/', secure: config.production, httpOnly: true, sameSite: 'strict' });
     res.json({ ok: true });
   });
   app.post('/api/auth/password', requireUser, limit('password-ip', 5), async (req, res) => {
