@@ -255,6 +255,28 @@ test('real PostgreSQL: role gates hold server-side and role changes revoke sessi
   assert.equal((await c.request('/api/admin/users')).status, 403);
 });
 
+test('real PostgreSQL: concurrent admin demotions cannot leave zero admins (AZ-2)', { skip: !enabled }, async () => {
+  // Two admins, each trying to demote the OTHER at the same instant. Without the FOR UPDATE lock both
+  // would read "another admin still exists" and both would commit, racing the system down to zero admins.
+  const aId = randomUUID();
+  const bId = randomUUID();
+  await pool.query("INSERT INTO users(id,email,name,password_hash,role) VALUES($1,'adm-a@example.com','A',$2,'admin'),($3,'adm-b@example.com','B',$2,'admin')", [aId, await hashPassword(password), bId]);
+  const a = await client({ config: { authRateLimit: 50 } });
+  const b = await client({ config: { authRateLimit: 50 } });
+  await a.init(); await a.login('adm-a@example.com'); await a.request('/api/auth/reauth', { method: 'POST', body: { password } });
+  await b.init(); await b.login('adm-b@example.com'); await b.request('/api/auth/reauth', { method: 'POST', body: { password } });
+  const [ra, rb] = await Promise.all([
+    a.request(`/api/admin/users/${bId}`, { method: 'PATCH', body: { role: 'member' } }),
+    b.request(`/api/admin/users/${aId}`, { method: 'PATCH', body: { role: 'member' } }),
+  ]);
+  const statuses = [ra.status, rb.status].sort();
+  // Exactly one demotion succeeds (200); the other is refused as the last admin (409).
+  assert.deepEqual(statuses, [200, 409]);
+  // The invariant held: at least one admin remains.
+  const admins = (await pool.query("SELECT count(*)::int AS n FROM users WHERE role='admin' AND id IN ($1,$2)", [aId, bId])).rows[0].n;
+  assert.equal(admins, 1);
+});
+
 test('real PostgreSQL: password changes reject wrong proof and revoke other active sessions', { skip: !enabled }, async () => {
   const c = await client({ config: { authRateLimit: 20 } });
   await c.init(); await c.register(); await c.login();

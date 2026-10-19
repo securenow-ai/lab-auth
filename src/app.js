@@ -171,7 +171,13 @@ export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
   const requireRole = (...allowed) => async (req, res, next) => {
     if (!req.user) return fail(res, 401, 'AUTH_REQUIRED', 'Sign in to continue.');
     if (!allowed.includes(req.user.role)) {
-      await event(req, 'authorization.denied', 'blocked', { route: req.route?.path || 'restricted', role: req.user.role });
+      const route = req.route?.path || req.baseUrl + req.path || 'restricted';
+      await event(req, 'authorization.denied', 'blocked', { route, role: req.user.role });
+      // AZ-1: export the authorization decision to SecureNow so role-boundary probing is detectable.
+      emit('authz.denied', req, { userId: req.user.id, attributes: {
+        decision: 'deny', reason: 'role_denied', route, method: req.method,
+        have_role: req.user.role, need_role: allowed.join('|'), target_ref: req.params?.id ?? null,
+      } });
       return fail(res, 403, 'FORBIDDEN', 'Your role does not allow this action.');
     }
     next();
@@ -401,11 +407,55 @@ export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
     if (req.params.id === req.user.id && req.body.role !== 'admin') return fail(res, 409, 'SELF_DEMOTION', 'Ask another administrator to change your role.');
     // F5: require a password re-check in the last 5 minutes before changing a role.
     if (!(req.session.reauthAt && Date.now() - req.session.reauthAt < 5 * 60_000)) {
+      // AZ-1: export the step-up denial so a session-only (no password) admin probing is detectable.
+      emit('authz.denied', req, { userId: req.user.id, attributes: {
+        decision: 'deny', reason: 'step_up_required', route: '/api/admin/users/:id/role', method: 'PATCH',
+        have_role: req.user.role, need_role: 'admin+recent_reauth', target_ref: req.params.id,
+      } });
       return fail(res, 403, 'STEP_UP_REQUIRED', 'Re-enter your password, then change the role.');
     }
-    const before = (await pool.query('SELECT role FROM users WHERE id=$1', [req.params.id])).rows[0]?.role;
-    const { rows } = await pool.query('UPDATE users SET role=$1,session_version=session_version+CASE WHEN role<>$1 THEN 1 ELSE 0 END,updated_at=CASE WHEN role<>$1 THEN now() ELSE updated_at END WHERE id=$2 RETURNING *', [req.body.role, req.params.id]);
-    if (!rows[0]) return fail(res, 404, 'NOT_FOUND', 'User not found.');
+    // AZ-2: admin-quorum invariant + race safety. Lock the admin set FOR UPDATE inside one transaction so
+    // two concurrent role changes serialize — the second blocks until the first commits, then recounts —
+    // and refuse any demotion that would leave zero admins. (A single-statement subquery would NOT close the
+    // race under READ COMMITTED: its count takes no lock on the admin rows.)
+    let before;
+    let rows;
+    let targetExists = false;
+    const tx = await pool.connect();
+    try {
+      await tx.query('BEGIN');
+      await tx.query("SELECT 1 FROM users WHERE role='admin' FOR UPDATE");
+      const cur = (await tx.query('SELECT role FROM users WHERE id=$1 FOR UPDATE', [req.params.id])).rows[0];
+      targetExists = Boolean(cur);
+      before = cur?.role;
+      const wouldRemoveLastAdmin = targetExists && before === 'admin' && req.body.role !== 'admin'
+        && (await tx.query("SELECT count(*)::int AS n FROM users WHERE role='admin' AND id<>$1", [req.params.id])).rows[0].n === 0;
+      if (targetExists && !wouldRemoveLastAdmin) {
+        rows = (await tx.query(
+          `UPDATE users SET role=$1,
+             session_version=session_version+CASE WHEN role<>$1 THEN 1 ELSE 0 END,
+             updated_at=CASE WHEN role<>$1 THEN now() ELSE updated_at END
+           WHERE id=$2 RETURNING *`,
+          [req.body.role, req.params.id],
+        )).rows;
+      }
+      await tx.query('COMMIT');
+    } catch (err) {
+      await tx.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      tx.release();
+    }
+    if (!rows?.[0]) {
+      if (targetExists) {
+        emit('authz.denied', req, { userId: req.user.id, attributes: {
+          decision: 'deny', reason: 'last_admin', route: '/api/admin/users/:id/role', method: 'PATCH',
+          have_role: req.user.role, need_role: 'admin', target_ref: req.params.id,
+        } });
+        return fail(res, 409, 'LAST_ADMIN', 'At least one administrator must remain. Promote another admin first.');
+      }
+      return fail(res, 404, 'NOT_FOUND', 'User not found.');
+    }
     // A changed role invalidates existing sessions; the next request must authenticate again.
     await event(req, 'admin.role_changed', 'success', { targetUserId: rows[0].id, role: rows[0].role });
     const rank = { member: 1, analyst: 2, admin: 3 };
