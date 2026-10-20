@@ -34,7 +34,7 @@ before(async () => {
   await migrate(pool);
 });
 beforeEach(async () => {
-  if (enabled) await pool.query('TRUNCATE security_events,rate_buckets,sessions,users RESTART IDENTITY CASCADE');
+  if (enabled) await pool.query('TRUNCATE orgs,security_events,rate_buckets,sessions,users RESTART IDENTITY CASCADE');
 });
 after(async () => {
   for (const app of apps) app.locals.sessionStore.close();
@@ -361,6 +361,70 @@ test('real PostgreSQL: administrator bootstrap is idempotent and never elevates 
   const c = await client(); await c.init(); await c.register('member@example.com');
   await assert.rejects(bootstrapAdmin(pool, { ...env, ADMIN_EMAIL: 'member@example.com' }), /will not elevate/);
   assert.equal((await pool.query("SELECT role FROM users WHERE email='member@example.com'")).rows[0].role, 'member');
+});
+
+// ─── Teams / orgs: Category O (collaboration, invites, membership) ────────────────────────────────
+async function verifiedUser(email) {
+  const c = await client();
+  await c.init();
+  await c.register(email);
+  await pool.query('UPDATE users SET email_verified=true WHERE email=$1', [email]);
+  await c.login(email);
+  return c;
+}
+const userId = async (email) => (await pool.query('SELECT id FROM users WHERE email=$1', [email])).rows[0].id;
+
+test('real PostgreSQL: an invite is bound to the invited identity (O-75 invite rebinding)', { skip: !enabled }, async () => {
+  const owner = await verifiedUser('owner@example.com');
+  const org = (await owner.request('/api/orgs', { method: 'POST', body: { name: 'Acme' } })).data.org;
+  assert.equal(org.role, 'owner');
+  const invite = (await owner.request(`/api/orgs/${org.id}/invites`, { method: 'POST', body: { email: 'alice@example.com', role: 'admin' } })).data.invite;
+  assert.equal(invite.role, 'admin');
+  // A DIFFERENT verified account cannot claim Alice's invite — the identity doesn't match.
+  const mallory = await verifiedUser('mallory@example.com');
+  assert.equal((await mallory.request(`/api/invites/${invite.token}/accept`, { method: 'POST', body: {} })).status, 403);
+  assert.equal((await pool.query('SELECT count(*) FROM org_members WHERE org_id=$1', [org.id])).rows[0].count, '1');
+  // The invited identity accepts and becomes an admin.
+  const alice = await verifiedUser('alice@example.com');
+  assert.equal((await alice.request(`/api/invites/${invite.token}/accept`, { method: 'POST', body: {} })).status, 200);
+  assert.equal((await pool.query('SELECT role FROM org_members WHERE org_id=$1 AND user_id=$2', [org.id, await userId('alice@example.com')])).rows[0].role, 'admin');
+  // Single-use: the same token can't be replayed.
+  assert.equal((await alice.request(`/api/invites/${invite.token}/accept`, { method: 'POST', body: {} })).status, 404);
+});
+
+test('real PostgreSQL: only an admin may invite, capped at their rank (O-72/O-73)', { skip: !enabled }, async () => {
+  const owner = await verifiedUser('owner2@example.com');
+  const org = (await owner.request('/api/orgs', { method: 'POST', body: { name: 'Beta' } })).data.org;
+  // Add a plain member via an invite they accept.
+  const inv = (await owner.request(`/api/orgs/${org.id}/invites`, { method: 'POST', body: { email: 'mem@example.com', role: 'member' } })).data.invite;
+  const member = await verifiedUser('mem@example.com');
+  await member.request(`/api/invites/${inv.token}/accept`, { method: 'POST', body: {} });
+  // A member cannot invite anyone.
+  assert.equal((await member.request(`/api/orgs/${org.id}/invites`, { method: 'POST', body: { email: 'x@example.com', role: 'member' } })).status, 403);
+  // A non-member cannot invite (and cannot list members — active-org re-verified).
+  const outsider = await verifiedUser('out@example.com');
+  assert.equal((await outsider.request(`/api/orgs/${org.id}/invites`, { method: 'POST', body: { email: 'y@example.com', role: 'member' } })).status, 403);
+  assert.equal((await outsider.request(`/api/orgs/${org.id}/members`)).status, 403);
+});
+
+test('real PostgreSQL: a member cannot escalate their own role (O-79 self-escalation)', { skip: !enabled }, async () => {
+  const owner = await verifiedUser('owner3@example.com');
+  const org = (await owner.request('/api/orgs', { method: 'POST', body: { name: 'Gamma' } })).data.org;
+  const inv = (await owner.request(`/api/orgs/${org.id}/invites`, { method: 'POST', body: { email: 'adm@example.com', role: 'admin' } })).data.invite;
+  const admin = await verifiedUser('adm@example.com');
+  await admin.request(`/api/invites/${inv.token}/accept`, { method: 'POST', body: {} });
+  const admId = await userId('adm@example.com');
+  // An admin cannot change their OWN role (to owner, or anything).
+  assert.equal((await admin.request(`/api/orgs/${org.id}/members/${admId}/role`, { method: 'PATCH', body: { role: 'owner' } })).status, 403);
+  assert.equal((await pool.query('SELECT role FROM org_members WHERE org_id=$1 AND user_id=$2', [org.id, admId])).rows[0].role, 'admin');
+  // The admin also cannot promote another member ABOVE the admin's own rank (to owner).
+  const inv2 = (await owner.request(`/api/orgs/${org.id}/invites`, { method: 'POST', body: { email: 'mem3@example.com', role: 'member' } })).data.invite;
+  const member = await verifiedUser('mem3@example.com');
+  await member.request(`/api/invites/${inv2.token}/accept`, { method: 'POST', body: {} });
+  const memId = await userId('mem3@example.com');
+  assert.equal((await admin.request(`/api/orgs/${org.id}/members/${memId}/role`, { method: 'PATCH', body: { role: 'owner' } })).status, 403);
+  // But a legitimate admin CAN promote a member to admin (same rank).
+  assert.equal((await admin.request(`/api/orgs/${org.id}/members/${memId}/role`, { method: 'PATCH', body: { role: 'admin' } })).status, 200);
 });
 
 test('integration test setup', { skip: enabled }, () => {

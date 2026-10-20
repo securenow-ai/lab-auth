@@ -502,6 +502,127 @@ export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
     res.json({ note });
   });
 
+  // ─── Teams / orgs: the collaboration surface (threat model 02-authorization, Category O) ──────────
+  // The membership lifecycle done RIGHT, with every attempt exported so SecureNow can catch the modern-
+  // SaaS authorization attacks no single request reveals: invite privilege-escalation, invite-identity
+  // rebinding, member self-escalation, and active-org context tampering.
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const orgRank = { member: 1, admin: 2, owner: 3 };
+  const orgRoleOf = async (orgId, userId) =>
+    (await pool.query('SELECT role FROM org_members WHERE org_id=$1 AND user_id=$2', [orgId, userId])).rows[0]?.role || null;
+
+  // Create an org — the creator becomes its owner.
+  app.post('/api/orgs', requireUser, limit('orgs-write-ip', 30), async (req, res) => {
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+    if (!name || name.length > 80) return fail(res, 400, 'INVALID_INPUT', 'An org needs a name (1–80 chars).');
+    const id = randomUUID();
+    await pool.query('INSERT INTO orgs(id,name,created_by) VALUES($1,$2,$3)', [id, name, req.user.id]);
+    await pool.query('INSERT INTO org_members(org_id,user_id,role) VALUES($1,$2,$3)', [id, req.user.id, 'owner']);
+    res.status(201).json({ org: { id, name, role: 'owner' } });
+  });
+
+  // List the orgs the caller belongs to (the legitimate baseline).
+  app.get('/api/orgs', requireUser, async (req, res) => {
+    const { rows } = await pool.query(
+      'SELECT o.id,o.name,m.role FROM org_members m JOIN orgs o ON o.id=m.org_id WHERE m.user_id=$1 ORDER BY o.created_at DESC LIMIT 100',
+      [req.user.id]);
+    res.json({ orgs: rows });
+  });
+
+  // Invite someone. O-72/O-73: only an admin/owner may invite, and the granted role is CAPPED at the
+  // inviter's rank (an admin cannot mint an owner). The role is server-set and bound to the invited
+  // email — never read back from the accept request. The attempt is exported BEFORE the decision, so
+  // an escalation attempt is visible even when it is denied.
+  app.post('/api/orgs/:orgId/invites', requireUser, limit('orgs-write-ip', 30), async (req, res) => {
+    const orgId = req.params.orgId;
+    const email = normalizeEmail(req.body?.email);
+    const invitedRole = req.body?.role === 'admin' ? 'admin' : 'member';
+    if (!uuidPattern.test(orgId)) return fail(res, 400, 'INVALID_INPUT', 'Invalid org id.');
+    if (!emailPattern.test(email) || email.length > 254) return fail(res, 400, 'INVALID_INPUT', 'Enter a valid email address.');
+    const actorRole = await orgRoleOf(orgId, req.user.id);
+    const allowed = actorRole && orgRank[actorRole] >= orgRank.admin && orgRank[invitedRole] <= orgRank[actorRole];
+    emit('membership.invite.created', req, { userId: req.user.id, attributes: {
+      org_ref: ref('org', orgId), inviter_role: actorRole || 'none', invited_role: invitedRole,
+      invited_ref: ref('acct', email), decision: allowed ? 'allow' : 'deny',
+    } });
+    if (!actorRole || orgRank[actorRole] < orgRank.admin) return fail(res, 403, 'FORBIDDEN', 'Only an org admin or owner can invite.');
+    if (orgRank[invitedRole] > orgRank[actorRole]) return fail(res, 403, 'FORBIDDEN', 'You cannot grant a role above your own.');
+    const token = randomUUID();
+    await pool.query('INSERT INTO org_invites(token,org_id,email,role,invited_by) VALUES($1,$2,$3,$4,$5)',
+      [token, orgId, email, invitedRole, req.user.id]);
+    res.status(201).json({ invite: { token, email, role: invitedRole } });
+  });
+
+  // Accept an invite. O-75 (invite-identity rebinding): the invite is bound to the invited email and may
+  // be accepted ONLY by the signed-in, verified owner of that address. A different account claiming the
+  // link is the classic SaaS account-takeover — rejected here, and exported as identity_match=false either
+  // way so the attempt is catchable. Single-use is enforced by the status transition.
+  app.post('/api/invites/:token/accept', requireUser, limit('orgs-write-ip', 30), async (req, res) => {
+    const token = req.params.token;
+    if (!uuidPattern.test(token)) return fail(res, 400, 'INVALID_INPUT', 'Invalid invite token.');
+    const invite = (await pool.query(
+      "SELECT * FROM org_invites WHERE token=$1 AND status='pending' AND expires_at>now()", [token])).rows[0];
+    if (!invite) return fail(res, 404, 'NOT_FOUND', 'This invite is not valid.');
+    const identityMatch = req.user.email === invite.email && req.user.email_verified === true;
+    emit('membership.invite.accepted', req, { userId: req.user.id, attributes: {
+      org_ref: ref('org', invite.org_id), granted_role: invite.role, invited_ref: ref('acct', invite.email),
+      identity_match: String(identityMatch), decision: identityMatch ? 'allow' : 'deny',
+    } });
+    if (!identityMatch) {
+      await event(req, 'membership.invite_rebinding_blocked', 'blocked', { org: invite.org_id });
+      return fail(res, 403, 'FORBIDDEN', 'This invite was issued to a different address.');
+    }
+    const tx = await pool.connect();
+    try {
+      await tx.query('BEGIN');
+      const claimed = (await tx.query(
+        "UPDATE org_invites SET status='accepted',accepted_by=$2 WHERE token=$1 AND status='pending' RETURNING org_id,role",
+        [token, req.user.id])).rows[0];
+      if (!claimed) { await tx.query('ROLLBACK'); return fail(res, 409, 'ALREADY_USED', 'This invite was already used.'); }
+      await tx.query('INSERT INTO org_members(org_id,user_id,role) VALUES($1,$2,$3) ON CONFLICT(org_id,user_id) DO UPDATE SET role=EXCLUDED.role',
+        [claimed.org_id, req.user.id, claimed.role]);
+      await tx.query('COMMIT');
+      res.json({ org: { id: claimed.org_id, role: claimed.role } });
+    } catch (error) { await tx.query('ROLLBACK').catch(() => {}); throw error; } finally { tx.release(); }
+  });
+
+  // List members — O-85/O-86: the active org is the one in the path, and membership is RE-VERIFIED here.
+  // A caller poking at an org they don't belong to is rejected and exported as member=false.
+  app.get('/api/orgs/:orgId/members', requireUser, async (req, res) => {
+    const orgId = req.params.orgId;
+    if (!uuidPattern.test(orgId)) return fail(res, 400, 'INVALID_INPUT', 'Invalid org id.');
+    const actorRole = await orgRoleOf(orgId, req.user.id);
+    if (!actorRole) {
+      emit('org.context.switched', req, { userId: req.user.id, attributes: { org_ref: ref('org', orgId), member: 'false', source: 'path' } });
+      return fail(res, 403, 'FORBIDDEN', 'You are not a member of this org.');
+    }
+    const { rows } = await pool.query('SELECT user_id,role,created_at FROM org_members WHERE org_id=$1 ORDER BY created_at LIMIT 200', [orgId]);
+    res.json({ members: rows });
+  });
+
+  // Change a member's role. O-79 (self-escalation) + O-80 (horizontal tampering): the actor must be an
+  // admin/owner OF THIS ORG, cannot change their OWN role, and cannot move anyone above the actor's own
+  // rank. Every attempt is exported with self + actor_role, so self-escalation is catchable even though
+  // it is rejected.
+  app.patch('/api/orgs/:orgId/members/:userId/role', requireUser, async (req, res) => {
+    const { orgId, userId } = req.params;
+    const toRole = req.body?.role;
+    if (!uuidPattern.test(orgId) || !uuidPattern.test(userId)) return fail(res, 400, 'INVALID_INPUT', 'Invalid id.');
+    if (!['owner', 'admin', 'member'].includes(toRole)) return fail(res, 400, 'INVALID_INPUT', 'Invalid role.');
+    const actorRole = await orgRoleOf(orgId, req.user.id);
+    const self = req.user.id === userId;
+    const fromRole = (await pool.query('SELECT role FROM org_members WHERE org_id=$1 AND user_id=$2', [orgId, userId])).rows[0]?.role || null;
+    const allowed = !!actorRole && orgRank[actorRole] >= orgRank.admin && !self && !!fromRole
+      && orgRank[toRole] <= orgRank[actorRole] && orgRank[fromRole] <= orgRank[actorRole];
+    emit('membership.role.changed', req, { userId: req.user.id, attributes: {
+      org_ref: ref('org', orgId), target_ref: ref('acct', userId), from_role: fromRole || 'none', to_role: toRole,
+      self: String(self), actor_role: actorRole || 'none', decision: allowed ? 'allow' : 'deny',
+    } });
+    if (!allowed) return fail(res, 403, 'FORBIDDEN', self ? 'You cannot change your own role.' : 'Your role does not allow this change.');
+    await pool.query('UPDATE org_members SET role=$3 WHERE org_id=$1 AND user_id=$2', [orgId, userId, toRole]);
+    res.json({ member: { user_id: userId, role: toRole } });
+  });
+
   app.use('/api', (_req, res) => fail(res, 404, 'NOT_FOUND', 'API route not found.'));
   const publicDir = fileURLToPath(new URL('../public', import.meta.url));
   app.use(express.static(publicDir, { dotfiles: 'deny', index: 'index.html', maxAge: '5m' }));

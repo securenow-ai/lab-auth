@@ -59,3 +59,38 @@ CREATE TABLE IF NOT EXISTS notes (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS notes_owner_idx ON notes (owner_id);
+
+-- Collaboration surface (threat model 02-authorization, Category O: teams / invites / membership).
+-- An org groups members; membership carries a per-org role; invites bind a role to a specific
+-- invited email with a single-use, expiring token. This is the modern-SaaS authorization surface.
+CREATE TABLE IF NOT EXISTS orgs (
+  id uuid PRIMARY KEY,
+  name varchar(80) NOT NULL,
+  created_by uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS org_members (
+  org_id uuid NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role text NOT NULL DEFAULT 'member' CHECK (role IN ('owner', 'admin', 'member')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (org_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS org_members_user_idx ON org_members (user_id);
+
+-- An invite is bound to the invited EMAIL (identity) and a role capped at creation. The token is a
+-- random uuid; single-use is enforced by the status transition pending -> accepted.
+CREATE TABLE IF NOT EXISTS org_invites (
+  token uuid PRIMARY KEY,
+  org_id uuid NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+  email text NOT NULL CHECK (email = lower(email)),
+  role text NOT NULL CHECK (role IN ('admin', 'member')),
+  invited_by uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'revoked')),
+  accepted_by uuid REFERENCES users(id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz NOT NULL DEFAULT now() + interval '7 days'
+);
+CREATE INDEX IF NOT EXISTS org_invites_org_idx ON org_invites (org_id);
+CREATE INDEX IF NOT EXISTS org_invites_email_idx ON org_invites (email);
