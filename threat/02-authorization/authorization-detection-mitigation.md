@@ -12,7 +12,7 @@ Reviewed & run 2026-10-19 · SecureNow SDK **8.12.2** · app `lab-auth` `df7ab01
 
 ## 1. Executive summary
 
-**Threats modeled 71 · detectable & covered 5 · partial 1 · gaps 0 live · N/A for this app 58 · rules created 4
+**Threats modeled 91 · detectable & covered 5 · partial 1 · gaps 0 live · N/A for this app 78 · rules created 4
 (all validated firing) · code fixes shipped 2.**
 
 lab-auth's access control is sound (see the code report). The job for SecureNow here was **visibility** — make
@@ -63,10 +63,15 @@ Mode `test-first` (promote after 3–7 days) or `prod-ready`. Mitigation is **co
 | 4 | Compromised-admin grant / fan-out (API5, CWE-269) | 🟢 | 2 | **R-AZ-03** `6ad693b7…4c6` | any `direction=elevate`, or ≥3 distinct `target_ref` / 60 min per admin | */15 | high | prod-ready | ① AZ-2 (shipped); ② revoke the admin session; ③ global block on confirmed takeover |
 | 5 | Forced browsing by method/case (CWE-288) | 🟢 | 1 | *(F6 + firewall)* | `/API/ADMIN/…` / wrong-case → 404 | realtime | med | prod-ready | firewall route rule + signature `instant.block` (no new SQL) |
 | — | Own-object scope (sessions) (CWE-639) | 🟡 | 3 | *(code — `:388` scopes to `req.user.id`)* | — | — | — | strength; keep the scope |
-| — | BOLA/IDOR (A), tenancy (I), confused-deputy (J), **agentic N (61–71)** | ⚪ | — | *out of scope* | lab-auth has no owned objects / tenants / agent surface | — | — | — | see code report §4; emit `tool.*`/`agent.*` when a tool surface appears |
+| — | BOLA/IDOR (A), tenancy (I), confused-deputy (J), **agentic N (61–71)**, **collaboration/teams O (72–91)** | ⚪ | — | *out of scope* | lab-auth has no owned objects / tenants / agent surface / shared workspaces | — | — | — | see code report §4; emit `tool.*`/`membership.*` when that surface appears |
 
 **Out of scope (N/A for lab-auth):** threats 1–8 (BOLA — no owned business objects, dashboard is static),
-49–52 (tenancy — single tenant), 53–55 (confused deputy/SSRF-authz), 61–71 (agentic — no agent/MCP/tool surface).
+49–52 (tenancy — single tenant), 53–55 (confused deputy/SSRF-authz), 61–71 (agentic — no agent/MCP/tool surface),
+**72–91 (collaboration, teams & invitations — lab-auth is single-tenant and single-user: no shared workspaces,
+organizations, invitations, member roles, or seats).** The maintained prompt covers Category O in full so a
+multi-tenant SaaS running the same threat model gets invite privilege-escalation, invite-identity rebinding,
+active-org context tampering, removal-doesn't-revoke, seat/billing, SCIM/JIT, and impersonation — the modern
+bug-bounty surface — mapped to `membership.*` detections out of the box.
 
 ---
 
