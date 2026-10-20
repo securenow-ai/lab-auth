@@ -12,8 +12,9 @@ Reviewed & run 2026-10-19 · SecureNow SDK **8.12.2** · app `lab-auth` `df7ab01
 
 ## 1. Executive summary
 
-**Threats modeled 91 · detectable & covered 5 · partial 1 · gaps 0 live · N/A for this app 78 · rules created 4
-(all validated firing) · code fixes shipped 2.**
+**Threats modeled 91 · detectable & covered 7 · partial 1 · gaps 0 live · N/A for this app 70 · rules created 6
+(all validated firing) · code fixes shipped 2.** The lab now spans authentication, authorization, statistical
+IDOR, and a real multi-tenant **teams / invitations** surface (Category O — see §12).
 
 lab-auth's access control is sound (see the code report). The job for SecureNow here was **visibility** — make
 authorization decisions observable so an agent can catch someone probing the role boundary, slipping past
@@ -63,15 +64,15 @@ Mode `test-first` (promote after 3–7 days) or `prod-ready`. Mitigation is **co
 | 4 | Compromised-admin grant / fan-out (API5, CWE-269) | 🟢 | 2 | **R-AZ-03** `6ad693b7…4c6` | any `direction=elevate`, or ≥3 distinct `target_ref` / 60 min per admin | */15 | high | prod-ready | ① AZ-2 (shipped); ② revoke the admin session; ③ global block on confirmed takeover |
 | 5 | Forced browsing by method/case (CWE-288) | 🟢 | 1 | *(F6 + firewall)* | `/API/ADMIN/…` / wrong-case → 404 | realtime | med | prod-ready | firewall route rule + signature `instant.block` (no new SQL) |
 | — | Own-object scope (sessions) (CWE-639) | 🟡 | 3 | *(code — `:388` scopes to `req.user.id`)* | — | — | — | strength; keep the scope |
-| — | BOLA/IDOR (A), tenancy (I), confused-deputy (J), **agentic N (61–71)**, **collaboration/teams O (72–91)** | ⚪ | — | *out of scope* | lab-auth has no owned objects / tenants / agent surface / shared workspaces | — | — | — | see code report §4; emit `tool.*`/`membership.*` when that surface appears |
+| — | Teams / invites — **Category O (72–91)** | 🟢 | 2 | **§12** `6ad7a1d8…` + `6ad7a1e0…` | invite rebinding / escalation · self-escalation / org probing | */10 | high | test-first | secure routes + `membership.*` events; see §12 |
+| — | BOLA/IDOR (A), tenancy (I), confused-deputy (J), **agentic N (61–71)** | ⚪ | — | *out of scope* | lab-auth has no owned objects / tenants / agent surface | — | — | — | see code report §4; emit `tool.*`/`agent.*` when a tool surface appears |
 
 **Out of scope (N/A for lab-auth):** threats 1–8 (BOLA — no owned business objects, dashboard is static),
-49–52 (tenancy — single tenant), 53–55 (confused deputy/SSRF-authz), 61–71 (agentic — no agent/MCP/tool surface),
-**72–91 (collaboration, teams & invitations — lab-auth is single-tenant and single-user: no shared workspaces,
-organizations, invitations, member roles, or seats).** The maintained prompt covers Category O in full so a
-multi-tenant SaaS running the same threat model gets invite privilege-escalation, invite-identity rebinding,
-active-org context tampering, removal-doesn't-revoke, seat/billing, SCIM/JIT, and impersonation — the modern
-bug-bounty surface — mapped to `membership.*` detections out of the box.
+49–52 (tenancy — single tenant), 53–55 (confused deputy/SSRF-authz), 61–71 (agentic — no agent/MCP/tool surface).
+**Category O (72–91, teams/invites) is now BUILT and validated on the lab — see §12.** The lab demonstrates the core
+membership-lifecycle threats (invite privilege-escalation & identity rebinding, self-escalation, active-org
+tampering); the remaining O items with no lab surface yet (ownership transfer, seat/billing, SCIM/JIT, support
+impersonation) stay forward-looking, and the maintained prompt covers all of them for a larger multi-tenant app.
 
 ---
 
@@ -231,6 +232,43 @@ SecureNow containment while a fix ships: rate-limit the scanner on the `:id` rou
 [`rules/lab-auth-idor-dump.sql`](rules/lab-auth-idor-dump.sql) ·
 [`rules/lab-auth-idor-sequential-walk.sql`](rules/lab-auth-idor-sequential-walk.sql) ·
 [`rules/lab-auth-idor-cross-owner.sql`](rules/lab-auth-idor-cross-owner.sql).
+
+---
+
+## 12. Teams & invitations — Category O (added 2026-10-20)
+
+The lab grew a real **multi-tenant collaboration surface**: organizations, invitations, and per-org member
+roles (`POST /api/orgs`, `POST /api/orgs/:orgId/invites`, `POST /api/invites/:token/accept`,
+`GET /api/orgs/:orgId/members`, `PATCH /api/orgs/:orgId/members/:userId/role`). This is the surface that
+dominates modern-SaaS bug-bounty reports, and every bug here is **invisible in a single request** — a wrong-
+identity invite accept or a self-promotion is one normal-looking call. The routes are built **securely** (the
+fix is the default), and every attempt — allow *or* deny — is exported as a `membership.*` event, so SecureNow
+catches the attack **shape** without ever seeing a breach succeed. Two detections, **test mode**, **validated
+live** against an invite-rebinding + self-escalation + org-probing attack, **quiet on the baseline** (an owner
+invites a member who accepts their own invite):
+
+| # | Threat (OWASP/CWE) | Tier | Rule (id) | Signal | Validated |
+|---|---|---|---|---|---|
+| 1 | Invite privilege-escalation & identity rebinding (API1/API3, CWE-863) | 2 event | `6ad7a1d8…1c0a` | `identity_match=false` accept, **or** denied admin/owner invite | ip .50 → **rebinding=1** + **escalation_invite=1** (2 rows) |
+| 2 | Self-escalation & active-org context tampering (API5, CWE-285) | 2 event | `6ad7a1e0…1c90` | self role-change to admin/owner, **or** ≥3 distinct non-member org switches | ip .60 → **self_escalation=1** + **nonmember_orgs=4** (2 rows) |
+
+**The tell:** no single request is an attack. The **distribution of decisions** is — an invite accepted by the
+wrong identity, a member editing their own role upward, one principal poking at orgs it never joined. The honest
+baseline (owner → invite → member accepts) returns **zero** rows in both rules.
+
+**Code posture — secure by default (the app fix is primary):**
+- **Invite accept is bound to the verified invited identity** — a different signed-in account is rejected, `identity_match=false` (O-75).
+- **Invites are admin/owner-only and capped at the inviter's rank**, role server-set and bound to the email, single-use/expiring token (O-72/O-73/O-74).
+- **Role change is admin-only, never self-targeted, capped at the actor's rank** (O-79/O-80).
+- **Active org is re-verified on every request** — a non-member probe is rejected and exported `member=false` (O-85/O-86).
+
+**Instrumentation:** both rules need the `membership.*` events — `membership.invite.created/accepted`,
+`membership.role.changed`, `org.context.switched` — emitted on every attempt from `src/app.js` (shipped).
+**Mitigation:** the code already denies every one of these; SecureNow containment on a confirmed attacker is
+a scoped block or session revoke on the acting account + IP. Rule files:
+[`rules/lab-auth-teams-invite-abuse.sql`](rules/lab-auth-teams-invite-abuse.sql) ·
+[`rules/lab-auth-teams-membership-abuse.sql`](rules/lab-auth-teams-membership-abuse.sql). Reproduce the attack
+with [`attack-simulation/teams-attack.mjs`](../../attack-simulation/teams-attack.mjs).
 
 ---
 
