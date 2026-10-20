@@ -49,3 +49,13 @@ CREATE TABLE IF NOT EXISTS rate_buckets (
   PRIMARY KEY (key, window_start)
 );
 ALTER TABLE rate_buckets ALTER COLUMN key TYPE varchar(100);
+
+-- A per-user object with a PREDICTABLE integer key, so IDOR hunting (scan / walk / dump) is realistic.
+CREATE TABLE IF NOT EXISTS notes (
+  id serial PRIMARY KEY,
+  owner_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title varchar(120) NOT NULL,
+  body text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS notes_owner_idx ON notes (owner_id);

@@ -277,6 +277,20 @@ test('real PostgreSQL: concurrent admin demotions cannot leave zero admins (AZ-2
   assert.equal(admins, 1);
 });
 
+test('real PostgreSQL: a note is readable only by its owner (IDOR fix)', { skip: !enabled }, async () => {
+  const owner = await client({ config: { authRateLimit: 20 } });
+  await owner.init(); await owner.register('noteowner@example.com'); await owner.login('noteowner@example.com');
+  const created = await owner.request('/api/notes', { method: 'POST', body: { title: 'secret', body: 'mine' } });
+  assert.equal(created.status, 201);
+  const noteId = created.data.note.id;
+  // the owner reads their own note
+  assert.equal((await owner.request(`/api/notes/${noteId}`)).status, 200);
+  // a different signed-in user gets 404 (not 200) — no IDOR, and no existence leak
+  const other = await client({ config: { authRateLimit: 20 } });
+  await other.init(); await other.register('nosey@example.com'); await other.login('nosey@example.com');
+  assert.equal((await other.request(`/api/notes/${noteId}`)).status, 404);
+});
+
 test('real PostgreSQL: password changes reject wrong proof and revoke other active sessions', { skip: !enabled }, async () => {
   const c = await client({ config: { authRateLimit: 20 } });
   await c.init(); await c.register(); await c.login();

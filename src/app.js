@@ -463,6 +463,45 @@ export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
     emit('auth.security.change', req, { userId: req.user.id, attributes: { action: 'role_changed', outcome: 'completed', step_up: true, target_ref: rows[0].id, direction } });
     res.json({ user: publicUser(rows[0]) });
   });
+
+  // ─── Notes: a per-user object with a predictable integer key ──────────────────────────────────
+  // Create a note owned by the signed-in user.
+  app.post('/api/notes', requireUser, limit('notes-write-ip', 60), async (req, res) => {
+    const title = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
+    const body = typeof req.body?.body === 'string' ? req.body.body : '';
+    if (!title || title.length > 120 || body.length > 4000) return fail(res, 400, 'INVALID_INPUT', 'A note needs a title (1–120 chars).');
+    const { rows } = await pool.query('INSERT INTO notes(owner_id,title,body) VALUES($1,$2,$3) RETURNING id,title,created_at', [req.user.id, title, body]);
+    res.status(201).json({ note: rows[0] });
+  });
+  // List the caller's OWN notes — correctly scoped (the legitimate baseline).
+  app.get('/api/notes', requireUser, async (req, res) => {
+    const { rows } = await pool.query('SELECT id,title,created_at FROM notes WHERE owner_id=$1 ORDER BY id DESC LIMIT 100', [req.user.id]);
+    res.json({ notes: rows });
+  });
+  // Read one note by id.
+  // AZ-IDOR fix: the row is scoped to the caller (`AND owner_id=$2`), so a note that exists but isn't yours
+  // is indistinguishable from one that doesn't exist (404) — no ownership leak. Before this fix any signed-in
+  // user could read any note by id; SecureNow caught the hunting behaviour from traffic (scan / walk / dump)
+  // and the actual breach from the cross-owner authz.granted event.
+  app.get('/api/notes/:id', requireUser, async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1 || id > 2_000_000_000) return fail(res, 400, 'INVALID_INPUT', 'Invalid note id.');
+    const { rows } = await pool.query('SELECT id,owner_id,title,body,created_at FROM notes WHERE id=$1 AND owner_id=$2', [id, req.user.id]);
+    const note = rows[0];
+    if (!note) {
+      emit('authz.denied', req, { userId: req.user.id, attributes: {
+        decision: 'deny', reason: 'not_found', route: '/api/notes/:id', method: 'GET', object_type: 'note', target_ref: String(id),
+      } });
+      return fail(res, 404, 'NOT_FOUND', 'Note not found.');
+    }
+    // Export the GRANT with the object's real owner, so cross-owner reads (the definitive IDOR breach) are detectable.
+    emit('authz.granted', req, { userId: req.user.id, attributes: {
+      decision: 'allow', route: '/api/notes/:id', method: 'GET', object_type: 'note',
+      object_id: String(id), owner_id: note.owner_id,
+    } });
+    res.json({ note });
+  });
+
   app.use('/api', (_req, res) => fail(res, 404, 'NOT_FOUND', 'API route not found.'));
   const publicDir = fileURLToPath(new URL('../public', import.meta.url));
   app.use(express.static(publicDir, { dotfiles: 'deny', index: 'index.html', maxAge: '5m' }));
