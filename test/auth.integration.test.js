@@ -404,6 +404,23 @@ test('real PostgreSQL: an invite is bound to the invited identity (O-75 invite r
   assert.equal((await alice.request(`/api/invites/${invite.token}/accept`, { method: 'POST', body: {} })).status, 404);
 });
 
+test('real PostgreSQL: invite links fall back to APP_ORIGIN when INVITE_LINK_BASE is unset', { skip: !enabled }, async () => {
+  const saved = process.env.INVITE_LINK_BASE;
+  try {
+    const owner = await verifiedUser('linkowner@example.com');
+    const org = (await owner.request('/api/orgs', { method: 'POST', body: { name: 'Links' } })).data.org;
+    delete process.env.INVITE_LINK_BASE;
+    const fallback = await owner.request(`/api/orgs/${org.id}/invites`, { method: 'POST', body: { email: 'a@example.com' } });
+    assert.equal(fallback.status, 201);
+    assert.equal(fallback.data.invite.link, `${config.appOrigin}/invite/${fallback.data.invite.token}`);
+    process.env.INVITE_LINK_BASE = 'https://invites.example.com';
+    const configured = await owner.request(`/api/orgs/${org.id}/invites`, { method: 'POST', body: { email: 'b@example.com' } });
+    assert.equal(configured.data.invite.link, `https://invites.example.com/invite/${configured.data.invite.token}`);
+  } finally {
+    if (saved === undefined) delete process.env.INVITE_LINK_BASE; else process.env.INVITE_LINK_BASE = saved;
+  }
+});
+
 test('real PostgreSQL: only an admin may invite, capped at their rank (O-72/O-73)', { skip: !enabled }, async () => {
   const owner = await verifiedUser('owner2@example.com');
   const org = (await owner.request('/api/orgs', { method: 'POST', body: { name: 'Beta' } })).data.org;

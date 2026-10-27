@@ -564,8 +564,8 @@ export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
     if (orgRank[invitedRole] > orgRank[actorRole]) return fail(res, 403, 'FORBIDDEN', 'You cannot grant a role above your own.');
     const token = randomUUID();
     try {
-      // The shareable link the inviter copies into an email or chat.
-      const link = new URL(`/invite/${token}`, process.env.INVITE_LINK_BASE).toString();
+      // The shareable link the inviter copies into an email or chat. INVITE_LINK_BASE is optional.
+      const link = new URL(`/invite/${token}`, process.env.INVITE_LINK_BASE || config.appOrigin).toString();
       await pool.query('INSERT INTO org_invites(token,org_id,email,role,invited_by) VALUES($1,$2,$3,$4,$5)',
         [token, orgId, email, invitedRole, req.user.id]);
       res.status(201).json({ invite: { token, email, role: invitedRole, link } });
