@@ -483,7 +483,8 @@ export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
     try {
       const { rows } = await pool.query('SELECT id,title,body,created_at FROM notes WHERE owner_id=$1 ORDER BY id', [req.user.id]);
       const lines = rows.map((note) => {
-        const words = note.body.match(/\S+/g).length;
+        // match() returns null when the body has no words (empty or whitespace-only).
+        const words = note.body.match(/\S+/g)?.length ?? 0;
         return [note.id, JSON.stringify(note.title), words, note.created_at.toISOString()].join(',');
       });
       res.type('text/csv').attachment('notes.csv').send(['id,title,words,created_at', ...lines].join('\n'));

@@ -291,6 +291,18 @@ test('real PostgreSQL: a note is readable only by its owner (IDOR fix)', { skip:
   assert.equal((await other.request(`/api/notes/${noteId}`)).status, 404);
 });
 
+test('real PostgreSQL: notes export counts zero words for an empty or whitespace-only body', { skip: !enabled }, async () => {
+  const c = await client({ config: { authRateLimit: 20 } });
+  await c.init(); await c.register(); await c.login();
+  for (const body of ['two words', '', '  \n\t ']) {
+    assert.equal((await c.request('/api/notes', { method: 'POST', body: { title: 'note', body } })).status, 201);
+  }
+  const exported = await c.request('/api/notes/export');
+  assert.equal(exported.status, 200);
+  const words = exported.text.split('\n').slice(1).map((line) => line.split(',')[2]);
+  assert.deepEqual(words, ['2', '0', '0']);
+});
+
 test('real PostgreSQL: password changes reject wrong proof and revoke other active sessions', { skip: !enabled }, async () => {
   const c = await client({ config: { authRateLimit: 20 } });
   await c.init(); await c.register(); await c.login();
