@@ -487,6 +487,8 @@ export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
         const words = note.body.match(/\S+/g)?.length ?? 0;
         return [note.id, JSON.stringify(note.title), words, note.created_at.toISOString()].join(',');
       });
+      // One line per export: who exported how many notes. No titles or bodies in logs.
+      console.info(JSON.stringify({ level: 'info', event: 'notes.export', userId: req.user.id, notes: rows.length, requestId: req.requestId }));
       res.type('text/csv').attachment('notes.csv').send(['id,title,words,created_at', ...lines].join('\n'));
     } catch (error) {
       console.error('[notes.export] export failed', error);

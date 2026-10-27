@@ -1,0 +1,12 @@
+We're investigating an account takeover on our lab-auth app (SecureNow, preview environment). A teammate
+started a forensics conversation in the SecureNow dashboard and the on-call engineer continued it from the
+terminal; its id is __CONVERSATION__. Read it first, then continue THAT conversation with
+securenow_forensics_chat (pass the conversationId) to finish the investigation:
+
+1. Did the attacker leave anything behind that would let them back in after Dana's password is reset?
+2. Anything we haven't covered yet that matters for the response?
+
+Don't change anything: this is read-only. Ask the chat precise follow-up questions, check its findings
+against the rows it returns, and when you're done write a short incident report for the ticket: how they
+got in, from where, the timeline, what they touched, what left, what they left behind, and the response
+you recommend (each action with the exact evidence behind it).
