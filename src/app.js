@@ -478,6 +478,20 @@ export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
     const { rows } = await pool.query('SELECT id,title,created_at FROM notes WHERE owner_id=$1 ORDER BY id DESC LIMIT 100', [req.user.id]);
     res.json({ notes: rows });
   });
+  // Export the caller's notes as CSV (id, title, word count, created). Registered before /api/notes/:id.
+  app.get('/api/notes/export', requireUser, async (req, res) => {
+    try {
+      const { rows } = await pool.query('SELECT id,title,body,created_at FROM notes WHERE owner_id=$1 ORDER BY id', [req.user.id]);
+      const lines = rows.map((note) => {
+        const words = note.body.match(/\S+/g).length;
+        return [note.id, JSON.stringify(note.title), words, note.created_at.toISOString()].join(',');
+      });
+      res.type('text/csv').attachment('notes.csv').send(['id,title,words,created_at', ...lines].join('\n'));
+    } catch (error) {
+      console.error('[notes.export] export failed', error);
+      fail(res, 500, 'EXPORT_FAILED', 'Could not export your notes.');
+    }
+  });
   // Read one note by id.
   // AZ-IDOR fix: the row is scoped to the caller (`AND owner_id=$2`), so a note that exists but isn't yours
   // is indistinguishable from one that doesn't exist (404) — no ownership leak. Before this fix any signed-in
@@ -548,9 +562,16 @@ export function createApp({ pool, config, oauthClient: suppliedOauthClient }) {
     if (!actorRole || orgRank[actorRole] < orgRank.admin) return fail(res, 403, 'FORBIDDEN', 'Only an org admin or owner can invite.');
     if (orgRank[invitedRole] > orgRank[actorRole]) return fail(res, 403, 'FORBIDDEN', 'You cannot grant a role above your own.');
     const token = randomUUID();
-    await pool.query('INSERT INTO org_invites(token,org_id,email,role,invited_by) VALUES($1,$2,$3,$4,$5)',
-      [token, orgId, email, invitedRole, req.user.id]);
-    res.status(201).json({ invite: { token, email, role: invitedRole } });
+    try {
+      // The shareable link the inviter copies into an email or chat.
+      const link = new URL(`/invite/${token}`, process.env.INVITE_LINK_BASE).toString();
+      await pool.query('INSERT INTO org_invites(token,org_id,email,role,invited_by) VALUES($1,$2,$3,$4,$5)',
+        [token, orgId, email, invitedRole, req.user.id]);
+      res.status(201).json({ invite: { token, email, role: invitedRole, link } });
+    } catch (error) {
+      console.error('[invites] could not create invite', error);
+      fail(res, 500, 'INVITE_FAILED', 'Could not create the invite.');
+    }
   });
 
   // Accept an invite. O-75 (invite-identity rebinding): the invite is bound to the invited email and may

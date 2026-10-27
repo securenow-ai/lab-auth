@@ -17,8 +17,15 @@ const cleanup = setInterval(async () => {
   }
 }, 60 * 60_000);
 cleanup.unref();
+// Expire stale org invites every minute so old invite links stop working.
+const expireInvites = setInterval(async () => {
+  const { rowCount } = await pool.query("UPDATE org_invites SET status='revoked' WHERE status='pending' AND expires < now()");
+  if (rowCount) console.log(`[invites] expired ${rowCount} stale invite(s)`);
+}, 60_000);
+expireInvites.unref();
 for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => {
   clearInterval(cleanup);
+  clearInterval(expireInvites);
   app.locals.sessionStore.close();
   server.close(async () => { await pool.end(); process.exit(0); });
   setTimeout(() => process.exit(1), 10_000).unref();
