@@ -1,5 +1,5 @@
 import { readConfig } from './config.js';
-import { createPool } from './db.js';
+import { createPool, revokeExpiredInvites } from './db.js';
 import { createApp } from './app.js';
 
 const config = readConfig();
@@ -19,8 +19,12 @@ const cleanup = setInterval(async () => {
 cleanup.unref();
 // Expire stale org invites every minute so old invite links stop working.
 const expireInvites = setInterval(async () => {
-  const { rowCount } = await pool.query("UPDATE org_invites SET status='revoked' WHERE status='pending' AND expires < now()");
-  if (rowCount) console.log(`[invites] expired ${rowCount} stale invite(s)`);
+  try {
+    const rowCount = await revokeExpiredInvites(pool);
+    if (rowCount) console.log(`[invites] expired ${rowCount} stale invite(s)`);
+  } catch (error) {
+    console.error(JSON.stringify({ level: 'error', code: error.code || 'INVITE_EXPIRY_ERROR' }));
+  }
 }, 60_000);
 expireInvites.unref();
 for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => {

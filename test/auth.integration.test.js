@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { createApp } from '../src/app.js';
-import { createPool, migrate } from '../src/db.js';
+import { createPool, migrate, revokeExpiredInvites } from '../src/db.js';
 import { hashPassword } from '../src/passwords.js';
 import { bootstrapAdmin } from '../src/bootstrap.js';
 
@@ -419,6 +419,19 @@ test('real PostgreSQL: invite links fall back to APP_ORIGIN when INVITE_LINK_BAS
   } finally {
     if (saved === undefined) delete process.env.INVITE_LINK_BASE; else process.env.INVITE_LINK_BASE = saved;
   }
+});
+
+test('real PostgreSQL: the invite expiry job revokes only pending invites past expires_at', { skip: !enabled }, async () => {
+  const owner = await verifiedUser('expiry@example.com');
+  const org = (await owner.request('/api/orgs', { method: 'POST', body: { name: 'Expiry' } })).data.org;
+  const invite = async (email) => (await owner.request(`/api/orgs/${org.id}/invites`, { method: 'POST', body: { email } })).data.invite.token;
+  const stale = await invite('stale@example.com');
+  const fresh = await invite('fresh@example.com');
+  await pool.query("UPDATE org_invites SET expires_at=now() - interval '1 minute' WHERE token=$1", [stale]);
+  assert.equal(await revokeExpiredInvites(pool), 1);
+  const status = async (token) => (await pool.query('SELECT status FROM org_invites WHERE token=$1', [token])).rows[0].status;
+  assert.equal(await status(stale), 'revoked');
+  assert.equal(await status(fresh), 'pending');
 });
 
 test('real PostgreSQL: only an admin may invite, capped at their rank (O-72/O-73)', { skip: !enabled }, async () => {
