@@ -39,3 +39,4 @@ deployment-output*.json
 
 # Attack-simulation local test account (fictional, never commit to this public repo)
 attack-simulation/test-account.local.json
+ep7/run/
