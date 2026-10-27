@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "securenow": {
+      "type": "http",
+      "url": "https://api.securenow.ai/mcp",
+      "headers": { "Authorization": "Bearer ${SECURENOW_API_KEY}" }
+    }
+  }
+}
