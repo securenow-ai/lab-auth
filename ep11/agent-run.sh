@@ -8,8 +8,12 @@ cd "$(dirname "$0")/.."
 APP_KEY="$1"
 STEP="${2:-build}"
 mkdir -p ep11/run
-# The SecureNow MCP server over stdio, signed in with your `npx securenow login` credentials.
-[ -f ep11/run/mcp.json ] || printf '%s\n' '{ "mcpServers": { "securenow": { "command": "npx", "args": ["securenow", "mcp"] } } }' > ep11/run/mcp.json
+# The SecureNow MCP server over stdio, signed in with your `npx securenow login` credentials. securenow@latest:
+# inside the lab, a bare `npx securenow` would run the lab's own (older) SDK, without the alert-rule tools.
+[ -f ep11/run/mcp.json ] || printf '%s\n' '{ "mcpServers": { "securenow": { "command": "npx", "args": ["-y", "securenow@latest", "mcp"] } } }' > ep11/run/mcp.json
+# Download the package before Claude Code starts the server: a cold npx download can outlast the MCP connect timeout.
+npx -y securenow@latest --version > /dev/null 2>&1 || true
+export MCP_TIMEOUT=120000
 TOOLS="mcp__securenow__securenow_alert_rule_draft,mcp__securenow__securenow_alert_rule_draft_status,mcp__securenow__securenow_alert_rule_create,mcp__securenow__securenow_alert_rules_list,mcp__securenow__securenow_alert_rule_get,mcp__securenow__securenow_notifications_list,mcp__securenow__securenow_notifications_get,mcp__securenow__securenow_apps_list"
 if [ "$STEP" = "build" ]; then
   PROMPT="$(sed "s/__APP_KEY__/$APP_KEY/" ep11/agent-prompt.txt)"

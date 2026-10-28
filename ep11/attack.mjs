@@ -4,7 +4,7 @@
 //   normal       five colleagues, Dana, and an "integration" account that exports notes every minute
 //                (busy, but normal for it). Start this first and leave it running: the baseline rule
 //                compares an account with its own history, and the instant rule's check replays these requests.
-//   scan         203.0.113.50   asks for secrets files (/.env, /.git/config, a database dump)    -> instant rule
+//   scan         203.0.113.51   asks for database dumps and backups (backup.sql, db.sql.gz, …)  -> instant rule
 //   brute        192.0.2.77     12 wrong passwords on one account in about a minute            -> threshold
 //   stuffing     192.0.2.100-139 40 addresses, 3 tries each, one browser string, 6 accounts    -> distinct count
 //                (the per-address rule stays quiet: no address goes past 3)
@@ -143,8 +143,8 @@ async function normal() {
 
 // ── the attacks ──────────────────────────────────────────────────────────────────────────────────────
 async function scan() {
-  const c = client('203.0.113.50', UA.scanner);
-  for (const route of ['/', '/robots.txt', '/.env', '/.git/config', '/backup.sql', '/.env.production', '/wp-login.php']) {
+  const c = client('203.0.113.51', UA.scanner);
+  for (const route of ['/', '/robots.txt', '/backup.sql', '/db.sql.gz', '/dump.sql', '/site.bak', '/api/health']) {
     await call('scan', c, 'GET', route);
     await jitter(300, 900);
   }
