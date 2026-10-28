@@ -1,0 +1,13 @@
+You're the detection engineer for our lab-auth app (SecureNow app key __APP_KEY__, staging environment).
+
+Hypothesis nobody has a rule for yet: after taking over an account, an attacker plants a way back in. They change
+the password, then create an organization from the victim's account and invite an outside email address as an
+admin. A password reset doesn't remove that invite.
+
+Build a SecureNow alert rule that catches this, using the SecureNow MCP tools:
+1. Draft it from English with securenow_alert_rule_draft (staging only) and read the draft: which kind it chose,
+   the SQL, and what the check against our data found. If it isn't right, say why and draft again.
+2. Create it with securenow_alert_rule_create, passing the draft's fields. It starts in test mode.
+3. Tell me in one line what to run to test it, then stop and wait: I'll run `node ep11/attack.mjs persistence`.
+
+Don't create anything else, don't change any other rule, and don't promote anything.
