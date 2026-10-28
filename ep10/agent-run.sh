@@ -6,6 +6,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 CONV="$1"
+mkdir -p ep10/run
+# The SecureNow MCP server over stdio, signed in with your `npx securenow login` credentials.
+[ -f ep10/run/mcp.json ] || printf '%s\n' '{ "mcpServers": { "securenow": { "command": "npx", "args": ["securenow", "mcp"] } } }' > ep10/run/mcp.json
 PROMPT="$(sed "s/__CONVERSATION__/$CONV/" ep10/agent-prompt.txt)"
 date -u +%Y-%m-%dT%H:%M:%SZ > ep10/run/agent-started.txt
 claude -p "$PROMPT" \
